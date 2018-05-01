@@ -116,3 +116,4 @@ document.body.appendChild(wrt.canvas);
 ```
 But you can use it as a guide for writing your own Writers.
 
+PDFI.js uses [pako.js](https://github.com/nodeca/pako) for the Deflate compression.
