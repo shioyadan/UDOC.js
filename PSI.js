@@ -38,7 +38,8 @@
 		var repeat = true;
 		while(repeat) repeat = PSI.step(os, ds, es, gs, env, genv);
 		
-		
+		if(env.pgOpen) genv.ShowPage();
+		genv.Done();
 		//PSI.interpret(file, os, ds, es, [], gst, genv);
 		console.log(Date.now()-time);
 	}
@@ -133,13 +134,13 @@
 			SM : 0.1,
 			doff: 0,
 			dash: [],
-			strokeAdj : false,
 			ctm : [1,0,0,1,0,0],
 			cpos: [0,0],
 			pth : {cmds:[],crds:[]}, 
-			cpth: {cmds:["M","L","L","L","Z"],crds:[crds[0],crds[1],crds[2],crds[1], crds[2],crds[3],crds[0],crds[3]]},  // clipping path
+			cpth: PSI.getPageBox(crds),  // clipping path
 		};
 	}
+	PSI.getPageBox = function(crds) {  return  {cmds:["M","L","L","L","Z"],crds:[crds[0],crds[1],crds[2],crds[1], crds[2],crds[3],crds[0],crds[3]]};  }
 	PSI._getFont = function() {
 		return {
 			Tc: 0, // character spacing
@@ -185,7 +186,7 @@
 		var tok = getToken(es, ds);  if(tok==null) return false;
 		var typ = tok.typ, val = tok.val;
 		
-		if(!env.pgOpen) {  genv.StartPage(env.bb[0], env.bb[1], env.bb[2], env.bb[3]);  env.pgOpen = true;   }
+		if(!env.pgOpen && val!="end") {  genv.StartPage(env.bb[0], env.bb[1], env.bb[2], env.bb[3]);  env.pgOpen = true;   }
 		
 		//console.log(tok, os.slice(0));
 		/*ocnt++;
@@ -242,6 +243,7 @@
 			else if(obj.typ=="operator")
 			{
 				var op = obj.val;
+				//console.log(op);
 				//if(omap[op]) op = omap[op];
 				
 				if(op=="def") {  var nv = os.pop(), nn = os.pop();  nn=nn.val.slice(1);  ds[ds.length-1][nn] = nv;  }
@@ -394,18 +396,18 @@
 				}
 				else if(op=="setfont"     ) gst.font = os.pop().val;
 				else if(op=="setlinewidth") gst.lwidth = os.pop().val;
-				else if(op=="setstrokeadjust") gst.strokeAdj = os.pop().val;
+				else if(op=="setstrokeadjust") gst.SA = os.pop().val;
 				else if(op=="setlinecap") gst.lcap = os.pop().val;
 				else if(op=="setlinejoin") gst.ljoin = os.pop().val;
 				else if(op=="setmiterlimit") gst.mlimit = os.pop().val;
 				else if(op=="setflat") gst.dd.flat=os.pop();
 				else if(op=="setdash"     ) {  gst.doff=os.pop().val;  gst.dash = PSI.readArr(os.pop().val);  }
 				else if(op=="show"||op=="ashow"||op=="widthshow") {  
-					var sar = os.pop().val, str=PSI.readStr(sar);
+					var sar = os.pop().val, str=PSI.readStr(sar); 
 					if(op=="widthshow") {  os.pop();  os.pop();  os.pop();  }
 					if(op=="ashow"    ) {  os.pop();  os.pop();  }
 					var om = gst.ctm;  gst.ctm = om.slice(0);  gst.ctm[4]=gst.cpos[0];  gst.ctm[5]=gst.cpos[1];//PSI.M.translate(gst.ctm,gst.cpos[0],gst.cpos[1]);
-					genv.PutText(gst, str);  gst.cpos[0] += str.length*PSI.M.getScale(om)*gst.font.Tfs*0.55;  //console.log(str, gst.font.Tfs);
+					genv.PutText(gst, str, str.length*0.55);  gst.cpos[0] += str.length*PSI.M.getScale(om)*gst.font.Tfs*0.55;  //console.log(str, gst.font.Tfs);
 					gst.ctm = om;
 				}
 				else if(op=="setgray"    ) {  var g=PSI.nrm(os.pop().val);  gst.colr = gst.COLR = [g,g,g];  }
@@ -428,7 +430,12 @@
 					}
 					gst.colr = gst.COLR = [PSI.nrm(r),PSI.nrm(g),PSI.nrm(b)];
 				}
-				else if(op=="clip" || op=="eoclip") {  gst.cpth = JSON.parse(JSON.stringify(gst.pth ));  }
+				else if(op=="clip" || op=="eoclip") {  
+					var bbN = PSI.G.getBB(gst.pth .crds);
+					var bbO = PSI.G.getBB(gst.cpth.crds);
+					if(gst.pth.cmds.length==5 && PSI.G.insideBox(bbO,bbN)) {}  // clipping with a box, that contains a current clip path
+					else   gst.cpth = JSON.parse(JSON.stringify(gst.pth ));  
+				}
 				else if(op=="clippath" ) {  gst.pth  = JSON.parse(JSON.stringify(gst.cpth));  }
 				else if(op=="pathbbox" ) {
 					var ps = gst.pth.crds;
@@ -625,10 +632,7 @@
 					for(var i=0; i<j; i++) els.unshift(els.pop());
 					for(var i=0; i<n; i++) os.push(els[i]);
 				}
-				else if(op=="index") {  var n=os.pop().val;
-					var els=[];  for(var i=0; i<=n; i++) els.push(os.pop());  els.reverse();
-					for(var i=0; i<=n; i++) os.push(els[i]);   os.push(els[0]);
-				}
+				else if(op=="index") {  var n=os.pop().val;  os.push(os[os.length-1-n]);  }
 				else if(op=="transform" || op=="itransform" || op=="dtransform") {
 					var m = os.pop(), y=0, x=0;  //console.log(m);
 					if(m.typ=="array") { m = PSI.readArr(m.val);  y = os.pop().val;  }
@@ -801,6 +805,7 @@
 					file.off=off+1;  //console.log(arr.join(","));  
 					return new Uint8Array(arr);  
 				}
+				if(cc==122) {  arr.push(0,0,0,0);  continue;  }
 				if(cc<33 || cc-33>84) throw "e";
 				tc += (cc-33)*pws[i];  i++;
 				if(i==5) {
@@ -837,6 +842,7 @@
 			for(var i=0; i<ps.length; i+=2) {  var x=ps[i],y=ps[i+1];  if(x<x0)x0=x; else if(x>x1)x1=x;  if(y<y0)y0=y;  else if(y>y1)y1=y;  }
 			return [x0,y0,x1,y1];
 		},
+		insideBox: function(a,b) {  return b[0]<=a[0] && b[1]<=a[1] && a[2]<=b[2] && a[3]<=b[3];   },
 		newPath: function(gst    ) {  gst.pth = {cmds:[], crds:[]};  },
 		moveTo : function(gst,x,y) {  var p=PSI.M.multPoint(gst.ctm,[x,y]);  //if(gst.cpos[0]==p[0] && gst.cpos[1]==p[1]) return;
 										gst.pth.cmds.push("M");  gst.pth.crds.push(p[0],p[1]);  gst.cpos = p;  },
@@ -903,7 +909,29 @@
 	}
 	PSI.C = {
 		srgbGamma : function(x) {  return x < 0.0031308 ? 12.92 * x : 1.055 * Math.pow(x, 1.0 / 2.4) - 0.055;  },
-		cmykToRgb : function(c) {  var iK = 1-c[3];  return [(1-c[0])*iK, (1-c[1])*iK, (1-c[2])*iK];  },
+		cmykToRgb : function(clr) { 
+			var c=clr[0], m=clr[1], y=clr[2], k=clr[3];
+			// return [1-Math.min(1,c+k), 1-Math.min(1, m+k), 1-Math.min(1,y+k)];
+			var r = 255
+			+ c * (-4.387332384609988  * c + 54.48615194189176  * m +  18.82290502165302  * y + 212.25662451639585 * k +  -285.2331026137004) 
+			+ m * ( 1.7149763477362134 * m - 5.6096736904047315 * y + -17.873870861415444 * k - 5.497006427196366) 
+			+ y * (-2.5217340131683033 * y - 21.248923337353073 * k +  17.5119270841813) 
+			+ k * (-21.86122147463605  * k - 189.48180835922747);
+			var g = 255
+			+ c * (8.841041422036149   * c + 60.118027045597366 * m +  6.871425592049007  * y + 31.159100130055922 * k +  -79.2970844816548) 
+			+ m * (-15.310361306967817 * m + 17.575251261109482 * y +  131.35250912493976 * k - 190.9453302588951) 
+			+ y * (4.444339102852739   * y + 9.8632861493405    * k -  24.86741582555878) 
+			+ k * (-20.737325471181034 * k - 187.80453709719578);
+			var b = 255
+			+ c * (0.8842522430003296  * c + 8.078677503112928  * m +  30.89978309703729  * y - 0.23883238689178934 * k + -14.183576799673286) 
+			+ m * (10.49593273432072   * m + 63.02378494754052  * y +  50.606957656360734 * k - 112.23884253719248) 
+			+ y * (0.03296041114873217 * y + 115.60384449646641 * k + -193.58209356861505)
+			+ k * (-22.33816807309886  * k - 180.12613974708367);
+
+			return [Math.max(0, Math.min(1, r/255)), Math.max(0, Math.min(1, g/255)), Math.max(0, Math.min(1, b/255))];
+			//var iK = 1-c[3];  
+			//return [(1-c[0])*iK, (1-c[1])*iK, (1-c[2])*iK];  
+		},
 		labToRgb  : function(lab) {
 			var k = 903.3, e = 0.008856, L = lab[0], a = lab[1], b = lab[2];
 			var fy = (L+16)/116, fy3 = fy*fy*fy;
@@ -967,6 +995,7 @@
 	
 	
 	PSI.getToken = function(es, ds) {
+		if(es.length==0) return null;
 		var src = es[es.length-1];
 		if(src.typ=="procedure") {
 			var tok = src.val[src.off];  src.off++;

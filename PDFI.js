@@ -9,9 +9,12 @@
 	PDFI.Parse = function(buff, genv)
 	{
 		buff = new Uint8Array(buff);
+		var off = 0;
+		while(buff[off]==32) off++;
+		if(off!=0) buff = new Uint8Array(buff.buffer, off, buff.length-off);
 		
-		var offset = buff.length-5;
-		while(PSI.B.readASCII(buff,offset,5) != "%%EOF") offset--;
+		var offset = buff.length-3;
+		while(PSI.B.readASCII(buff,offset,3) != "%%E") offset--;
 		
 		var eoff = offset;
 		
@@ -54,9 +57,7 @@
 		//console.log(Date.now()-time);
 	}
 	PDFI.render = function(root, genv)
-	{
-		var rbb = root["/Pages"]["/MediaBox"];
-		
+	{		
 		var ops = [
 			"CS","cs","SCN","scn","SC","sc","sh",
 			"Do", "gs", "ID","EI", "re","cm","y","v","B","B*",  "BT","ET",
@@ -75,7 +76,7 @@
 			"q":"gsave",  "Q":"grestore",
 			"m":"moveto",  "l":"lineto",  "c":"curveto", "h":"closepath",
 			"W":"clip",  "W*":"eoclip",
-			"f":"fill","F":"fill","f*":"eofill", "S":"stroke",
+			"f":"fill","F":"fill","f*":"eofill", "S":"stroke",  "b":"h B", "b*":"h B*",
 			"n":"newpath",
 			
 			"RG" : "/DeviceRGB  CS SCN",
@@ -108,8 +109,9 @@
 			
 			var cts = pg["/Contents"];   //console.log(pg);
 			if(cts.length==null) cts = [cts];
+			//var uu = pg["/UserUnit"];  if(uu) console.log(uu);
 			
-			var bb = pg["/MediaBox"];  if(bb==null) bb = rbb;
+			var bb = pg["/MediaBox"];  if(bb==null) bb = root["/Pages"]["/MediaBox"];
 			var env = PSI._getEnv(bb);  env.pgOpen = true;
 			var gs = [];
 			var os = [];	// operand stack
@@ -177,7 +179,7 @@
 				else if(p=="/op") gst.op = v;
 				else if(p=="/SMask") {  gst.SMask = "";  }
 				else if(p=="/SM") gst.SM = v;
-				else if(p=="/BG" || p=="/HT" || p=="/TR" || p=="/UCR") {}
+				else if(p=="/HT" || p=="/TR") {}
 				else console.log("Unknown gstate property: ", p, v);
 			}
 		}
@@ -269,12 +271,14 @@
 			var sps = res ? res["/ColorSpace"] : null;  //if(sps!=null) console.log(sps[csi]);
 			if(sps!=null && sps[csi]!=null) {
 				if(sps[csi][1] && sps[csi][1]["/Alternate"])  cs = sps[csi][1]["/Alternate"];  //cs = sps[csi][0];
-				else cs = sps[csi][0];
+				else cs = (typeof sps[csi] == "string") ? sps[csi] : sps[csi][0];
 			}
 			else cs = csi;
-			//console.log(res, cs, os);
-			if(cs=="/Lab" || cs=="/ICCBased" || cs=="/DeviceRGB" || cs=="/DeviceN") {  c=[os.pop().val, os.pop().val, os.pop().val];  c.reverse();  }
-			else if(cs=="/DeviceCMYK") {  var cmyk=[os.pop().val,os.pop().val,os.pop().val,os.pop().val];  cmyk.reverse();  c = PSI.C.cmykToRgb(cmyk);  }
+			//console.log(res, cs, os.slice(0));
+			if(cs=="/Lab" || cs=="/DeviceRGB" || cs=="/DeviceN" || (cs=="/ICCBased" && sps[csi][1]["/N"]==3)) {  
+					c=[os.pop().val, os.pop().val, os.pop().val];  c.reverse();  }
+			else if(cs=="/DeviceCMYK" || (cs=="/ICCBased" && sps[csi][1]["/N"]==4)) {  
+					var cmyk=[os.pop().val,os.pop().val,os.pop().val,os.pop().val];  cmyk.reverse();  c = PSI.C.cmykToRgb(cmyk);  }
 			else if(cs=="/DeviceGray" || cs=="/CalGray") {  var gv=PSI.nrm(os.pop().val);  c=[gv,gv,gv];  }
 			else if(cs=="/Separation") {  var lab = PDFI.Func(sps[csi][3], [os.pop().val]);  c = PSI.C.labToRgb(lab);  }
 			else if(cs=="/Pattern")    {  
@@ -285,7 +289,7 @@
 				PDFI.setShadingFill(pt["/Shading"], pt["/Matrix"], stk, gst);
 				return;//*/  os.pop();  c=[1,0.5,0]; 
 			}
-			else {  console.log(cs, os, sps, res);  throw("e");  }
+			else {  console.log(csi, cs, os, sps, res);  throw("e");  }
 			//console.log(c);
 			if(stk) gst.COLR = c;  else gst.colr=c;
 		}
@@ -294,8 +298,10 @@
 			//window.asdf++;  if(window.asdf!=6) return;
 			var sh = res["/Shading"][os.pop().val];  //console.log(sh);
 			var ocolr = gst.colr, opth = gst.pth;
-			gst.pth = gst.cpth;
+			gst.pth = gst.cpth;  gst.cpth = PSI.getPageBox(env.bb);
 			PDFI.setShadingFill(sh, gst.ctm.slice(0), false, gst);
+			//console.log(gst);
+
 			genv.Fill(gst);
 			gst.colr = ocolr;  gst.pth = opth;
 		}
@@ -322,26 +328,44 @@
 		}
 		else {  console.log("Unknown shading type", styp);  return;  }
 		
-		var fill = {typ:ftyp, mat:mat, grad:PDFI.getGrad(sh["/Function"]), crds:sh["/Coords"]}
-		
+		//console.log(gst);  console.log(sh);
+		var fill = {typ:ftyp, mat:mat, grad:PDFI.getGrad(sh["/Function"], cs), crds:sh["/Coords"]}
 		if(stk) gst.COLR = fill;  else gst.colr=fill;
 	}
 	
-	PDFI.getGrad = function(fn) {
+	PDFI.getGrad = function(fn, cs) {
+		var F = PDFI._normColor;
 		var fs = fn["/Functions"], ft = fn["/FunctionType"], bs = fn["/Bounds"], enc = fn["/Encode"];
-		if(ft==0 || ft==2) return [   [0,PDFI.Func(fn,[0])],  [1,PDFI.Func(fn,[1])]   ];
+		//console.log(fn);
+		if(ft==0 || ft==2) return [   [0,F(fn,[0], cs)],  [1,F(fn,[1], cs)]   ];
 		var zero = enc[0];
 		var grd = [];
-		if(bs.length==0 || bs[0]>0) grd.push([0, PDFI.Func(fs[0], [zero])] );
-		for(var i=0; i<bs.length; i++)  grd.push([bs[i], PDFI.Func(fs[i],[zero])]);
-		if(bs.length==0 || bs[bs.length-1]<1) grd.push([1, PDFI.Func(fs[fs.length-1], [1-zero])]);
+		if(bs.length==0 || bs[0]>0) grd.push([0, F(fs[0], [zero], cs)] );
+		for(var i=0; i<bs.length; i++)  grd.push([bs[i], F(fs[i],[zero], cs)]);
+		if(bs.length==0 || bs[bs.length-1]<1) grd.push([1, F(fs[fs.length-1], [1-zero], cs)]);
 		//console.log(fn, grd);
 		return grd;
 	}
 	PDFI._clrSamp = function(stm, i) {  return [stm[i]/255, stm[i+1]/255, stm[i+2]/255];  }
 	
+	PDFI._normColor = function(fn, vls, cs) {
+		//console.log(fn, vls, cs);
+		var clr = PDFI.Func(fn, vls);
+		if(cs[3] && cs[3].stream) {
+			clr = PDFI.Func(cs[3], clr);
+			//console.log(clr);
+			if(cs[2]=="/DeviceCMYK" || clr.length==4) {  clr = PSI.C.cmykToRgb(clr);  }
+			else {  console.log(clr, cs);  throw "e";  }
+			//console.log(clr);
+		}
+		//if(clr.length<3) {  console.log(clr.slice(0));  throw "e";  clr.push(1);  }
+		return clr;
+	}
+	
 	PDFI.getImage = function(xo, gst) {
-		var w=xo["/Width"], h=xo["/Height"], ar = w*h, ft=xo["/Filter"], cs=xo["/ColorSpace"], bpc=xo["/BitsPerComponent"], stm=xo["stream"];
+		var w=xo["/Width"], h=xo["/Height"], ar = w*h, ft=xo["/Filter"], cs=xo["/ColorSpace"], bpc=xo["/BitsPerComponent"], stm=xo["stream"], mte=xo["/Matte"];
+		//if(w==295 && h==98) console.log(xo);
+		//if(w=="327" && h==9) console.log(xo);
 		var img = xo["image"];  //console.log(xo);
 		if(img==null) {
 			var msk = xo["/Mask"];
@@ -352,6 +376,13 @@
 					for(var i=0; i<str.length; i++) pte[i] = str.charCodeAt(i);
 				}							
 				else pte = cs[3]["stream"];
+				if(cs[1]=="/DeviceCMYK") {
+					var opte = pte, pte = new Uint8Array(256*3);
+					for(var i=0; i<256; i++) {  var qi=(i<<2), ti=qi-i, rgb = PSI.C.cmykToRgb([opte[qi]/255, opte[qi+1]/255, opte[qi+2]/255, opte[qi+3]/255]);  
+						pte[ti]=rgb[0]*255;  pte[ti+1]=rgb[1]*255;  pte[ti+2]=rgb[2]*255;  
+						//var ib = 1-(opte[qi+3]/255);  pte[ti]=(255-opte[qi])*ib;  pte[ti+1]=(255-opte[qi+1])*ib;  pte[ti+2]=(255-opte[qi+2])*ib;  
+					}
+				}
 				var nc = new Uint8Array(ar*4);
 				PDFI.plteImage(stm, 0, nc, pte, w, h, bpc, msk);
 				img=nc;
@@ -369,6 +400,14 @@
 				img = nc;
 			}
 			else {  img = stm;  }
+			if(mte && mte.join("")!="000") {
+				var r = Math.round(mte[0]*255), g=Math.round(mte[1]*255), b=Math.round(mte[2]*255);
+				for(var i=0; i<img.length; i+=4) {
+					img[i  ]=Math.max(img[i  ],r);
+					img[i+1]=Math.max(img[i+1],g);
+					img[i+2]=Math.max(img[i+2],b);
+				}
+			}
 			xo["image"] = img;
 		}
 		return img;
@@ -396,12 +435,13 @@
 	
 	PDFI.Func = function(f, vls)
 	{
+		//console.log(f, vls);
 		var dom = f["/Domain"], rng = f["/Range"], typ = f["/FunctionType"], out = [];
 		for(var i=0; i<vls.length; i++) vls[i]=Math.max(dom[2*i], Math.min(dom[2*i+1], vls[i]));
 		if(typ==0) {
 			var enc = f["/Encode"], sz = f["/Size"], dec = f["/Decode"], n = rng.length/2;
 			if(enc==null) enc=[0,sz[0]-1];
-			if(dec==null) dec=[0,sz[0]-1,0,sz[0]-1,0,sz[0]-1];
+			if(dec==null) dec=rng;//[0,sz[0]-1,0,sz[0]-1,0,sz[0]-1];
 			
 			for(var i=0; i<vls.length; i++) {
 				var ei = PDFI.intp(vls[i],dom[2*i],dom[2*i+1],enc[2*i],enc[2*i+1]);
@@ -418,7 +458,25 @@
 			var x = vls[0];
 			for(var i=0; i<c0.length; i++) out[i] = c0[i] + Math.pow(x,N) * (c1[i]-c0[i]);
 		}
-		else throw "e";
+		else if(typ==4) {
+			var env = PSI._getEnv([0,0,0,0]);  env.pgOpen = true;
+			var gs = [];
+			var os = [];	// operand stack
+			var ds = PSI._getDictStack([], {});
+			var es = [];
+			
+			//console.log(PSI.B.readASCII(f["stream"],0,f["stream"].length));
+			es.push({  typ:"file", val: {  buff:f["stream"], off:0 }  });	// execution stack
+			var repeat = true;
+			while(repeat) repeat = PSI.step(os, ds, es, gs, env, {}, PDFI.operator);
+			
+			var proc = os.pop();  proc.off=0;
+			es.push(proc);
+			for(var i=0; i<vls.length; i++) os.push({typ:"real",val:vls[i]});
+			repeat = true;
+			while(repeat) repeat = PSI.step(os, ds, es, gs, env, {}, PDFI.operator);
+			for(var i=0; i<os.length; i++) out.push(os[i].val);
+		}
 		
 		if(rng) for(var i=0; i<out.length; i++) out[i]=Math.max(rng[2*i], Math.min(rng[2*i+1], out[i]));
 		return out;
@@ -427,14 +485,15 @@
 	
 	PDFI.getString = function(sv, fnt)
 	{
-		//console.log(sv, fnt);  //throw "e";
+		//if(sv.length==9) console.log(sv, fnt);  //throw "e";
 		
 		var st = fnt["/Subtype"], s="", m=0, psn=null;
 		var tou = fnt["/ToUnicode"], enc = fnt["/Encoding"], sfnt=fnt;	// font with a stream
 		if(st=="/Type0") sfnt = fnt["/DescendantFonts"][0];  // // only in type 0
 		
 		if(tou!=null) s = PDFI.toUnicode(sv, tou);
-		else if(enc=="/WinAnsiEncoding") s = PDFI.fromWin(sv);
+		else if(enc=="/WinAnsiEncoding" ) s = PDFI.encFromMap(sv, PDFI._win1252);
+		else if(enc=="/MacRomanEncoding") s = PDFI.encFromMap(sv, PDFI._macRoman);
 		else if(st=="/Type0") {
 			var off=0;
 			if(enc=="/Identity-H") off=31;
@@ -463,9 +522,10 @@
 		
 		
 		if(st=="/Type0") {
-			//console.log(df);  //throw "e";
+			//console.log(fnt);  //throw "e";
 			var ws = sfnt["/W"];
-			//console.log(sv, fnt);
+			if(ws==null) m = s.length*1000*0.4;
+			else
 			for(var i=0; i<sv.length; i+=2) {
 				var cc = (sv[i]<<8)|sv[i+1], gotW = false;
 				for(var j=0; j<ws.length; j+=2) {
@@ -498,6 +558,7 @@
 			}
 		}
 		if(psn==null) psn = fnt["/BaseFont"].slice(1);
+		//if(sv.length==9) console.log(s);
 		return [s, m, psn.split("+").pop()];
 	}
 	PDFI._psName = function(fle) {
@@ -530,9 +591,9 @@
 		}
 		return null;
 	}
-	PDFI.fromWin = function(sv)
+	PDFI.encFromMap = function(sv, map)
 	{
-		var map = PDFI._win1252;  s="";
+		var s="";
 		for(var j=0; j<sv.length; j++) {
 			var cc = sv[j], ci = map.indexOf(cc);
 			if(ci!=-1) cc = map[ci+1];
@@ -540,6 +601,35 @@
 		}
 		return s;
 	}
+	
+	PDFI._win1252  = [ 0x80, 0x20AC, 0x82, 0x201A, 0x83, 0x0192,	0x84, 0x201E, 0x85, 0x2026, 0x86, 0x2020, 0x87, 0x2021, 0x88, 0x02C6, 0x89, 0x2030,
+0x8A, 0x0160, 0x8B, 0x2039, 0x8C, 0x0152, 0x8E, 0x017D, 0x91, 0x2018, 0x92, 0x2019, 0x93, 0x201C, 0x94, 0x201D, 0x95, 0x2022, 0x96, 0x2013,
+0x97, 0x2014, 0x98, 0x02DC, 0x99, 0x2122, 0x9A, 0x0161, 0x9B, 0x203A, 0x9C, 0x0153, 0x9E, 0x017E, 0x9F, 0x0178	];
+
+	PDFI._macRoman = [ 0x80,0xc4, 0x81,0xc5, 0x82,0xc7, 0x83,0xc9, 0x84,0xd1, 0x85,0xd6, 0x86,0xdc, 0x87,0xe1, 
+					   0x88,0xe0, 0x89,0xe2, 0x8a,0xe4, 0x8b,0xe3, 0x8c,0xe5, 0x8d,0xe7, 0x8e,0xe9, 0x8f,0xe8,
+					   
+					   0x90,0xea, 0x91,0xeb, 0x92,0xed, 0x93,0xec, 0x94,0xee, 0x95,0xef, 0x96,0xf1, 0x97,0xf3,
+					   0x98,0xf2, 0x99,0xf4, 0x9a,0xf6, 0x9b,0xf5, 0x9c,0xfa, 0x9d,0xf9, 0x9e,0xfb, 0x9f,0xfc,
+					   
+					   0xa0,0x2020, 0xa1,0xb0, 0xa2,0xa2, 0xa3,0xa3, 0xa4,0xa7, 0xa5,0x2022, 0xa6,0xb6, 0xa7,0xdf,
+					   0xa8,0xae, 0xa9,0xa9, 0xaa,0x2122, 0xab,0xb4, 0xac,0xa8, 0xad,0x2660, 0xae,0xc6, 0xaf,0xd8,
+					   
+					   0xb0,0x221e, 0xb1,0xb1, 0xb2,0x2264, 0xb3,0x2265, 0xb4,0xa5, 0xb5,0xb5, 0xb6,0x2202, 0xb7,0x2211, 
+					   0xb8,0x220f, 0xb9,0x3c0, 0xba,0x222b, 0xbb,0xaa, 0xbc,0xba, 0xbd,0x3a9, 0xbe,0xe6, 0xbf,0xf8,
+					   
+					   0xc0,0xbf, 0xc1,0xa1, 0xc2,0xac, 0xc3,0x221a, 0xc4,0x192, 0xc5,0x2248, 0xc6,0x2206, 0xc7,0xab,
+					   0xc8,0xbb, 0xc9,0x2026, 0xca,0xa0, 0xcb,0xc0, 0xcc,0xc3, 0xcd,0xd5, 0xce,0x152, 0xcf,0x153,
+					   
+					   0xd0,0x2013, 0xd1,0x2014, 0xd2,0x201c, 0xd3,0x201d, 0xd4,0x2018, 0xd5,0x2019, 0xd6,0xf7, 0xd7,0x25ca, 
+					   0xd8,0xff, 0xd9,0x178, 0xda,0x2044, 0xdb,0x20ac, 0xdc,0x2039, 0xdd,0x203a, 0xde,0xfb01, 0xdf,0xfb02, 
+					   
+					   0xe0,0x2021, 0xe1,0xb7, 0xe2,0x201a, 0xe3,0x201e, 0xe4,0x2030, 0xe5,0xc2, 0xe6,0xca, 0xe7,0xc1, 
+					   0xe8,0xcb, 0xe9,0xc8, 0xea,0xcd, 0xeb,0xce, 0xec,0xcf, 0xed,0xcc, 0xee,0xd3, 0xef,0xd4, 
+					   
+					   0xf0,0xf8ff, 0xf1,0xd2, 0xf2,0xda, 0xf3,0xdb, 0xf4,0xd9, 0xf5,0x131, 0xf6,0x2c6, 0xf7,0x2dc, 
+					   0xf8,0xaf, 0xf9,0x2d8, 0xfa,0x2d9, 0xfb,0x2da, 0xfc,0xb8, 0xfd,0x2dd, 0xfe,0x2db, 0xff,0x2c7   ];
+	
 	PDFI.fromCName = function(cn)
 	{
 		if(cn.length==1) return cn;
@@ -601,10 +691,7 @@
 		}
 		return s;
 	}
-	PDFI._win1252 = [ 0x80, 0x20AC, 0x82, 0x201A, 0x83, 0x0192,	0x84, 0x201E, 0x85, 0x2026, 0x86, 0x2020, 0x87, 0x2021, 0x88, 0x02C6, 0x89, 0x2030,
-0x8A, 0x0160, 0x8B, 0x2039, 0x8C, 0x0152, 0x8E, 0x017D, 0x91, 0x2018, 0x92, 0x2019, 0x93, 0x201C, 0x94, 0x201D, 0x95, 0x2022, 0x96, 0x2013,
-0x97, 0x2014, 0x98, 0x02DC, 0x99, 0x2122, 0x9A, 0x0161, 0x9B, 0x203A, 0x9C, 0x0153, 0x9E, 0x017E, 0x9F, 0x0178	];
-	
+
 	PDFI.readXrefTrail = function(buff, xref, out)
 	{
 		var kw = PSI.B.readASCII(buff, xref, 4);
@@ -612,10 +699,11 @@
 			var off = xref+4;  
 			if(buff[off]==13) off++;  if(buff[off]==10) off++;
 			while(true) {	// start of the line with M, N
+				if(PSI.B.readASCII(buff, off, 7)=="trailer") {  off+=8;  break;  }
 				var of0 = off;
 				while(!PSI.isEOL(buff[off])) off++;  
 				var line = PSI.B.readASCII(buff,  of0, off-of0);  //console.log(line);  
-				if(line=="trailer") break;  line = line.split(" ");
+				line = line.split(" ");
 				var n = parseInt(line[1]);
 				if(buff[off]==13) off++;  if(buff[off]==10) off++;
 				for(var i=0; i<n; i++)
@@ -665,6 +753,7 @@
 		}
 	}
 	PDFI.getInt = function(b,o,l) {
+		if(l==0) return 0;
 		if(l==1) return b[o];
 		if(l==2) return ((b[o]<< 8)|b[o+1]);
 		if(l==3) return ((b[o]<<16)|(b[o+1]<<8)|b[o+2]);   throw "e";
