@@ -11,7 +11,7 @@ If you want to render a PDF file, use [pdf.js](https://github.com/mozilla/pdf.js
 * `b`: ArrayBuffer - a binary data of a document
 * `w`: Writer object (e.g. an instance of ToPDF.js)
 
-A parser takes a binary file and parses it. During that process, it calls methods of the **writer** (like `w.StartPage(...)`, `w.Fill(...)`, `w.Stroke(...)`, `w.PutText(...)`, `w.PutImage(...)`, `w.ShowPage()` ...). The data of the file flow from the Parser to the Writer by calling these methods.
+A Parser takes a binary file and parses it. During that process, it calls methods of the **writer** (like `w.StartPage(...)`, `w.Fill(...)`, `w.Stroke(...)`, `w.PutText(...)`, `w.PutImage(...)`, `w.ShowPage()` ...). The data of the file flow from the Parser to the Writer by calling these methods.
 
 Documents consist of pages. The parser calls `w.StartPage(...)` at the beginning of each page, and `w.ShowPage()` at the end of each page. `Fill`, `Stroke`, `PutText` and `PutImage` calls can occur in between. The parsing is finished by calling `w.Done()`.
 
@@ -76,7 +76,7 @@ cmds : ["M", "L", "C", "Z"],         // drawing commands (moveTo, lineTo, curveT
 crds : [0,0,  1,1,  2,2,3,0,2,1  ]   // coordinates for drawing commands (2 for M and L, 6 for C, 0 for Z)
 ```
 
-You can make your own Writers and give them to existing Parsers. Your writer can do simple or complex work. E.g. you can extract all raster images out of a PDF or convert the PDF into SVG or your own format. Here is a simple writer, that counts pages and stores all strings.
+By making a single Writer (into your internal format), you will let your software load PS, PDF, EMF, WMF and possibly other formats (for which Parsers exist). By making a single Parser (from your internal format), you will let your software export documents into PDF, EMF and other formats (for which Writers exist). Here is a simple writer, that counts pages and stores all strings.
 
 ```javascript
 var numPages = 0, strings = [], ef = function(){};
@@ -92,7 +92,7 @@ console.log(numPages, strings);
 
 UDOC.js contains various utilities, that can be used by Parsers or Writers. E.g. `UDOC.getState()` returns a default Graphic State. `UDOC.M` contains utilities for working with 2D matrices, and `UDOC.G` contains utilities for working with vector paths.
 
-# Generating PDF files
+# Generating documents
 
 This repository contains the ToPDF and ToEMF Writers. You can use ToPDF with FromPS to convert PostScript to PDF (or even with FromPDF to convert PDF to PDF), but you can also use it to generate PDFs from your own format.
 
@@ -101,7 +101,7 @@ Here is an example of drawing a simple square and [the result](http://www.ivank.
 var gst = UDOC.getState();  // Graphics State with default parameters;
 gst.colr= [0.8,0,0.8];      // purple fill color
 gst.pth = {  cmds:["M","L","L","L","Z"], crds:[20,20,80,20,80,80,20,80]  };  // a square
-var pdf = new ToPDF();
+var pdf = new ToPDF();  // or new ToEMF(); to make an EMF file
 pdf.StartPage(0,0,100,100);  pdf.Fill(gst);  pdf.ShowPage();  pdf.Done();
 console.log(pdf.buffer);  // ArrayBuffer of the PDF file
 ```
