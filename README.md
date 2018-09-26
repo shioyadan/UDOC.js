@@ -1,22 +1,19 @@
-# PDFI.js
-[!!! Live Demo !!!](http://www.ivank.net/veci/pdfi/)  PDFI.js is a robust PDF and PostScript processor with a very simple interface. It is used in [Photopea](https://www.Photopea.com) to load and save PS, EPS and PDF files.
+# UDOC.js
+[!!! Live Demo !!!](http://www.ivank.net/veci/pdfi/)  UDOC.js is a robust document parser and converter with a very simple interface. It is used in [Photopea](https://www.Photopea.com) to load and save PS, EPS, PDF, WMF and EMF files.
 
-If you want to render a PDF file, use [pdf.js](https://github.com/mozilla/pdf.js). For all other PDF-related operations, use PDFI.js. The library consists of 3 parts:
-* PSI.js - PostScript Interpreter
-* PDFI.js - PDF Interpreter, an extension of PSI.js
-* ToPDF.js - PDF generator, can be used separately (without PSI or PDFI)
+If you want to render a PDF file, use [pdf.js](https://github.com/mozilla/pdf.js). For all other PDF-related operations, use UDOC.js.
 
 <img src="interface.svg" width="50%">
 
 # Parsing
 
-#### `[ PDFI | PSI ].Parse(b, w)`
-* `b`: ArrayBuffer - a binary PDF or PS file
-* `w`: Writer object (e.g. an instance of ToContext2D.js)
+#### `FromXYZ.Parse(b, w)`
+* `b`: ArrayBuffer - a binary data of a document
+* `w`: Writer object (e.g. an instance of ToPDF.js)
 
-A parser (PDFI or PSI) takes a binary file and parses it. During that process, it calls methods of the **writer** (like `w.StartPage(...)`, `w.Fill(...)`, `w.Stroke(...)`, `w.PutText(...)`, `w.PutImage(...)`, `w.ShowPage()` ...). The data of the PDF file flow from the Parser to the Writer by calling these methods.
+A parser takes a binary file and parses it. During that process, it calls methods of the **writer** (like `w.StartPage(...)`, `w.Fill(...)`, `w.Stroke(...)`, `w.PutText(...)`, `w.PutImage(...)`, `w.ShowPage()` ...). The data of the file flow from the Parser to the Writer by calling these methods.
 
-PDF and PostScript files consist of pages. The parser calls `w.StartPage(...)` at the beginning of each page, and `w.ShowPage()` at the end of each page. `Fill`, `Stroke`, `PutText` and `PutImage` calls can occur in between. The parsing is finished by calling `w.Done()`.
+Documents consist of pages. The parser calls `w.StartPage(...)` at the beginning of each page, and `w.ShowPage()` at the end of each page. `Fill`, `Stroke`, `PutText` and `PutImage` calls can occur in between. The parsing is finished by calling `w.Done()`.
 
 #### `w.StartPage(x0,y0,x1,y1)`
 * `x0,y0,x1,y1` - the bounding box of the page
@@ -79,7 +76,7 @@ cmds : ["M", "L", "C", "Z"],         // drawing commands (moveTo, lineTo, curveT
 crds : [0,0,  1,1,  2,2,3,0,2,1  ]   // coordinates for drawing commands (2 for M and L, 6 for C, 0 for Z)
 ```
 
-You can make your own Writers and give them to PSI / PDFI. Your writer can do simple or complex work. E.g. you can extract all raster images out of a PDF or convert the PDF into SVG or your own format. Here is a simple writer, that counts pages and stores all strings.
+You can make your own Writers and give them to existing Parsers. Your writer can do simple or complex work. E.g. you can extract all raster images out of a PDF or convert the PDF into SVG or your own format. Here is a simple writer, that counts pages and stores all strings.
 
 ```javascript
 var numPages = 0, strings = [], ef = function(){};
@@ -88,32 +85,35 @@ var W = {  // our writer
     PutText : function(gst, str, stw) {  strings.push(str);  },
     ShowPage: function() {  numPages++;  }
 };  
-PDFI.Parse(pdfFile, W);
+FromPDF.Parse(pdfFile, W);
 console.log(numPages, strings);
 ```
+## UDOC.js file
+
+UDOC.js contains various utilities, that can be used by Parsers or Writers. E.g. `UDOC.getState()` returns a default Graphic State. `UDOC.M` contains utilities for working with 2D matrices, and `UDOC.G` contains utilities for working with vector paths.
 
 # Generating PDF files
 
-This repository contains the ToPDF (ToPDF.js) Writer. You can use it with PSI to convert PostScript to PDF (or even with PDFI to convert PDF to PDF), but you can also use it to generate PDFs from your own format.
+This repository contains the ToPDF and ToEMF Writers. You can use ToPDF with FromPS to convert PostScript to PDF (or even with FromPDF to convert PDF to PDF), but you can also use it to generate PDFs from your own format.
 
 Here is an example of drawing a simple square and [the result](http://www.ivank.net/veci/pdfi/square.pdf).
 ```javascript
-var gst = {/* ... */};  // set default parameters or use PSI._getState();
-gst.colr= [0.8,0,0.8];     // purple fill color
+var gst = UDOC.getState();  // Graphics State with default parameters;
+gst.colr= [0.8,0,0.8];      // purple fill color
 gst.pth = {  cmds:["M","L","L","L","Z"], crds:[20,20,80,20,80,80,20,80]  };  // a square
 var pdf = new ToPDF();
 pdf.StartPage(0,0,100,100);  pdf.Fill(gst);  pdf.ShowPage();  pdf.Done();
 console.log(pdf.buffer);  // ArrayBuffer of the PDF file
 ```
 
-The Writer ToContext2D (ToContext2D.js) can be used as a simple renderer of PS / PDF files.
+The Writer ToContext2D (ToContext2D.js) can be used as a simple renderer of PS, PDF, WMF or EMF files.
 ```javascript
 var pNum  = 0;  // number of the page, that you want to render
 var scale = 1;  // the scale of the document
 var wrt = new ToContext2D(pNum, scale);
-PDFI.Parse(myFile, wrt);
+FromPDF.Parse(myFile, wrt);
 document.body.appendChild(wrt.canvas);
 ```
 But you can use it as a guide for writing your own Writers.
 
-PDFI.js uses [pako.js](https://github.com/nodeca/pako) for the Deflate compression.
+FromPDF and ToPDF use [pako.js](https://github.com/nodeca/pako) for the Deflate compression.
