@@ -11,7 +11,7 @@ If you want to render a PDF file, use [pdf.js](https://github.com/mozilla/pdf.js
 * `b`: ArrayBuffer - a binary data of a document
 * `w`: Writer object (e.g. an instance of ToPDF.js)
 
-A Parser takes a binary file and parses it. During that process, it calls methods of the **writer** (like `w.StartPage(...)`, `w.Fill(...)`, `w.Stroke(...)`, `w.PutText(...)`, `w.PutImage(...)`, `w.ShowPage()` ...). The data of the file flow from the Parser to the Writer by calling these methods.
+A Parser takes a binary file and parses it. During that process, it calls methods of the **writer** (like `w.StartPage(...)`, `w.Fill(...)`, `w.Stroke(...)`, `w.PutText(...)`, `w.PutImage(...)`, `w.ShowPage()` ...). The data of the document flow from the Parser to the Writer by calling these methods.
 
 Documents consist of pages. The parser calls `w.StartPage(...)` at the beginning of each page, and `w.ShowPage()` at the end of each page. `Fill`, `Stroke`, `PutText` and `PutImage` calls can occur in between. The parsing is finished by calling `w.Done()`.
 
