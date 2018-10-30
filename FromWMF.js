@@ -9,15 +9,17 @@
 	FromWMF.Parse = function(buff, genv)
 	{
 		buff = new Uint8Array(buff);  var off=0;
-		var prms = {fill:false, strk:false, bb:[0,0,1,1], lbb:[0,0,1,1]};
+		var prms = {fill:false, strk:false, bb:[0,0,1,1], lbb:[0,0,1,1], scl:1, fnt:{nam:"Arial",hgh:25,und:false,orn:0,chrst:0}, tclr:[0,0,0], talg:0};
 		
 		var rS = FromWMF.B.readShort, rU = FromWMF.B.readUshort, rU32 = FromWMF.B.readUint;
 		
 		var key = rU32(buff,0); 
 		if(key==0x9AC6CDD7) {
 			off = 6;
-			for(var i=0; i<4; i++) {  prms.bb[i] = rS(buff,off);  off+=2;  }
-			var dpi = rS(buff, off);  off+=2;
+			var dpi = rS(buff, off+8);  prms.scl=120/dpi;
+			for(var i=0; i<4; i++) {  prms.bb[i] = Math.round(rS(buff,off)*prms.scl);  off+=2;  }
+			off+=2;
+			//console.log(prms.bb, dpi);
 			off += 6;
 			//console.log(bb, dpi);
 		}
@@ -26,7 +28,7 @@
 		
 		
 		
-		var gst = UDOC.getState(prms.bb);		
+		var gst = UDOC.getState(prms.bb);
 		
 		var type = rU(buff, off);  off+=2;
 		var hSiz = rU(buff, off);  off+=2;
@@ -74,14 +76,25 @@
 					else if(co.stl==1) {}
 					else throw co.stl+" e";
 					gst.colr=co.clr;
-					if(co.htc!=0) throw "e";
+					//if(co.htc!=0) throw co.stl+" "+co.htc+" e";
 				}
 				else if(co.t=="pn") {
-					prms.strk=co.stl!=5;
-					if     (co.stl==0) gst.lwidth = co.px;
-					else if(co.stl==5) {}
-					else throw co.stl+" e";
+					var stl = (co.stl&7);
+					prms.strk=stl!=5;
+					if     (stl==0 || stl==6) gst.lwidth = co.px;
+					else if(stl==5) {}
+					else throw stl+" e";
+					
+					if((co.stl&0x1000)!=0) gst.ljoin=2;  // bevel 
+					else if((co.stl&0x2000)!=0) gst.ljoin=0;  // miter
+					else gst.ljoin = 1;  // round
 					gst.COLR=co.clr;
+				}
+				else if(co.t=="fn") {
+					prms.fnt = co;
+					gst.font.Tf = co.nam;
+					gst.font.Tfs = Math.abs(co.hgh);
+					gst.font.Tun = co.und;
 				}
 				else throw "e";
 			}
@@ -108,6 +121,30 @@
 				obj.py  = rS(buff, loff);  loff+=2;  //console.log(stl, px, py);
 				obj.clr = [buff[loff]/255, buff[loff+1]/255, buff[loff+2]/255];  loff+=4;
 			}
+			else if(fnm=="CREATEFONTINDIRECT") {
+				obj = {t:"fn", nam:""};
+				//obj.stl = rU(buff, loff);  loff+=2;
+				obj.hgh = rS(buff, loff);  loff += 2;
+				loff += 2*2;
+				obj.orn = rS(buff, loff)/10;  loff+=2;
+				var wgh = rS(buff, loff);  loff+=2;  //console.log(wgh);
+				obj.und = buff[loff+1];  loff += 2;
+				obj.stk = buff[loff  ];  obj.chrst = buff[off+1];  loff += 2;  //console.log(obj.chrst);
+				loff+=4;
+				//console.log(PUtils.readASCII(buff, off, 200));
+				while(buff[loff]!=0) {  obj.nam+=String.fromCharCode(buff[loff]);  loff++;  }
+				if(wgh>500) obj.nam+="-Bold";
+				//console.log(wgh, obj.nam);
+				//console.log(obj);
+			}
+			else if(fnm=="CREATEPALETTE") {  obj = {t:"pl"};  }
+			else if(fnm=="SETTEXTCOLOR") prms.tclr = [buff[loff]/255, buff[loff+1]/255, buff[loff+2]/255]; 
+			else if(fnm=="SETTEXTALIGN") prms.talg = rU(buff, loff);
+			else if(fnm=="MOVETO" ) {  UDOC.G.moveTo(gst, rS(buff,loff+2), rS(buff,loff));  }
+			else if(fnm=="LINETO"   ) {  
+				if(gst.pth.cmds.length==0) {  var im=gst.ctm.slice(0);  UDOC.M.invert(im);  var p = UDOC.M.multPoint(im, gst.cpos);  UDOC.G.moveTo(gst, p[0], p[1]);  }  
+				UDOC.G.lineTo(gst, rS(buff,loff+2), rS(buff,loff));  var ofill=prms.fill;  prms.fill=false;  FromWMF._draw(genv, gst, prms);  prms.fill=ofill;
+			}
 			else if(fnm=="POLYPOLYGON") {
 				var nop = rU(buff, loff);  loff+=2;
 				var pi = loff;  loff+= nop*2;
@@ -121,7 +158,23 @@
 			else if(fnm=="POLYGON" || fnm=="POLYLINE") {
 				var ppp = rU(buff, loff);  loff+=2;
 				loff = FromWMF._drawPoly(buff,loff,ppp,gst, fnm=="POLYGON");
-				var ofill = prms.fill;  prms.fill = fnm=="POLYGON";
+				var ofill = prms.fill;  prms.fill = (ofill && fnm=="POLYGON");
+				FromWMF._draw(genv, gst, prms);
+				prms.fill = ofill;
+			}
+			else if(fnm=="RECTANGLE" || fnm=="ELLIPSE") {
+				var y1 = rS(buff, loff);  loff+=2;
+				var x1 = rS(buff, loff);  loff+=2;
+				var y0 = rS(buff, loff);  loff+=2;
+				var x0 = rS(buff, loff);  loff+=2;
+				if(fnm=="RECTANGLE") {
+					UDOC.G.moveTo(gst, x0,y0);  UDOC.G.lineTo(gst, x1,y0);  UDOC.G.lineTo(gst, x1,y1);  UDOC.G.lineTo(gst, x0,y1);
+				} else {
+					var x = (x0+x1)/2, y = (y0+y1)/2;
+					UDOC.G.arc(gst,x,y,(y1-y0)/2,0,2*Math.PI, false);
+				}
+				UDOC.G.closePath(gst);
+				var ofill = prms.fill;  prms.fill = true;
 				FromWMF._draw(genv, gst, prms);
 				prms.fill = ofill;
 			}
@@ -132,17 +185,52 @@
 				var sw = rS(buff, loff);  loff+=2;
 				var sy = rS(buff, loff);  loff+=2;
 				var sx = rS(buff, loff);  loff+=2;
-				var dh = rS(buff, loff);  loff+=2;
-				var dw = rS(buff, loff);  loff+=2;
-				var dy = rS(buff, loff);  loff+=2;
-				var dx = rS(buff, loff);  loff+=2;
+				var hD = rS(buff, loff);  loff+=2;
+				var wD = rS(buff, loff);  loff+=2;
+				var yD = rS(buff, loff);  loff+=2;
+				var xD = rS(buff, loff);  loff+=2;
 				//console.log(rop, cu, sx,sy,sw,sh,"-",dx,dy,dw,dh);
 				var img = FromWMF._loadDIB(buff, loff);
+				
 				var ctm = gst.ctm.slice(0);
-				UDOC.M.scale(gst.ctm, dw, -dh);
-				UDOC.M.translate(gst.ctm, dx, dy+dh);
+				gst.ctm = [1,0,0,1,0,0];
+				UDOC.M.scale(gst.ctm, wD, -hD);
+				UDOC.M.translate(gst.ctm, xD, yD+hD);
+				UDOC.M.concat(gst.ctm, ctm);
 				genv.PutImage(gst, img, sw, sh);
 				gst.ctm = ctm;
+			}
+			else if(fnm=="EXTTEXTOUT") {
+				var rfy = rS(buff, loff);  loff+=2;
+				var rfx = rS(buff, loff);  loff+=2;
+				
+				gst.font.Tm = [1,0,0,-1,0,0];
+				UDOC.M.rotate(gst.font.Tm, prms.fnt.orn*Math.PI/180);
+				UDOC.M.translate(gst.font.Tm, rfx, rfy);
+				
+				var alg = prms.talg;
+				if     ((alg&6)==6) gst.font.Tal = 2;
+				else if((alg&7)==0) gst.font.Tal = 0;
+				else throw alg+" e";
+				if((alg&24)==24) {}  // baseline
+				else if((alg&24)==0) UDOC.M.translate(gst.font.Tm, 0, gst.font.Tfs);
+				else throw "e";
+				
+				var crs = rU(buff, loff);  loff+=2;
+				var ops = rU(buff, loff);  loff+=2;  //if(ops!=0) throw "e";
+				if(ops&4) loff+=8;
+				
+				//console.log(buff.slice(loff, loff+crs));
+				var str = "";
+				for(var i=0; i<crs; i++) {
+					var cc = buff[loff+i];
+					if(cc>127) {  i++;  cc=(cc<<8)|buff[loff+i];  }
+					str+=String.fromCharCode(cc);  //console.log(gst.font.Tfs, str);
+				}
+				//console.log(str);
+				//for(var i=0; i<crs; i++) str+=String.fromCharCode(rU(buff,loff+i*2));  //console.log(gst.font.Tfs, str);
+				var oclr = gst.colr;  gst.colr = prms.tclr;
+				genv.PutText(gst, str, str.length*gst.font.Tfs*0.5);  gst.colr=oclr;
 			}
 			else {
 				console.log(fnm, siz);
@@ -164,34 +252,58 @@
 		
 		var hsize = rU32(buff, off);  off+=4;
 		
-		var w, h;
+		var w, h, cu;
 		if(hsize==0xc) throw "e";
 		else {
 			w = rU32(buff, off);  off+=4;
 			h = rU32(buff, off);  off+=4;
 			var ps = rU(buff, off);  off+=2;  if(ps!= 1) throw "e";
-			var bc = rU(buff, off);  off+=2;  if(bc!=24) throw "e";
+			var bc = rU(buff, off);  off+=2;  if(bc!=1 && bc!=24 && bc!=32) throw bc+" e";
 			//console.log(w,h,ps,bc);
 			
 			var cmpr = rU32(buff, off);  off+=4;  if(cmpr!=0) throw "e";
 			var size = rU32(buff, off);  off+=4;
 			var xppm = rU32(buff, off);  off+=4;
 			var yppm = rU32(buff, off);  off+=4;
-			var cu = rU32(buff, off);  off+=4;   if(cu!=0) throw "e";
+			    cu = rU32(buff, off);  off+=4;   //if(cu!=0) throw cu+" e";  // number of colors used ... 0: all colors
 			var ci = rU32(buff, off);  off+=4;
 			//console.log(cmpr, size, xppm, yppm, cu, ci);
 		}
+		
 		var area = w*h;
 		var img = new Uint8Array(area*4);
 		var rl = Math.floor(((w * ps * bc + 31) & ~31) / 8);
-		for(var y=0; y<h; y++) 
-			for(var x=0; x<w; x++) {
-				var i=y*w+x, qi = (i<<2), ti = (h-y-1)*rl + 3*x;
-				img[qi  ] = buff[off+ti+2];
-				img[qi+1] = buff[off+ti+1];
-				img[qi+2] = buff[off+ti+0];
-				img[qi+3] = 255;
+		if(bc==1 ) 
+			for(var y=0; y<h; y++) {
+				var j = off+cu*4+(h-1-y)*rl;
+				for(var x=0; x<w; x++) {
+					var qi = (y*w+x)<<2, ind = (buff[j+(x>>>3)]>>>(7-(x&7)))&1;
+					img[qi  ] = buff[off+ind*4+2];
+					img[qi+1] = buff[off+ind*4+1];
+					img[qi+2] = buff[off+ind*4+0];
+					img[qi+3] = 255;
+				}
 			}
+		if(bc==24) {
+			for(var y=0; y<h; y++) 
+				for(var x=0; x<w; x++) {
+					var qi = (y*w+x)<<2, ti=off+(h-1-y)*rl+x*3;
+					img[qi  ] = buff[ti+2];
+					img[qi+1] = buff[ti+1];
+					img[qi+2] = buff[ti+0];
+					img[qi+3] = 255;
+				}
+		}
+		if(bc==32) {
+			for(var y=0; y<h; y++) 
+				for(var x=0; x<w; x++) {
+					var qi = (y*w+x)<<2, ti=off+(h-1-y)*rl+x*4;
+					img[qi  ] = buff[ti+2];
+					img[qi+1] = buff[ti+1];
+					img[qi+2] = buff[ti+0];
+					img[qi+3] = buff[ti+3];
+				}
+		}
 		return img;
 	}
 	
