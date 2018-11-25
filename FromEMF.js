@@ -20,6 +20,7 @@
 			var fnm = FromEMF.K[fnc]; 
 			var siz = rU32(buff, off);  off+=4;
 			
+			//if(gst && isNaN(gst.ctm[0])) throw "e";
 			//console.log(fnc,fnm,siz);
 			
 			var loff = off;
@@ -45,33 +46,34 @@
 			else if(["SETMAPMODE","SETPOLYFILLMODE","SETBKMODE"/*,"SETVIEWPORTEXTEX"*/,"SETICMMODE","SETROP2","EXTSELECTCLIPRGN"].indexOf(fnm)!=-1) {}
 			//else if(fnm=="INTERSECTCLIPRECT") {  var r=prms.crct=FromEMF._readBox(buff, loff);  /*var y0=r[1],y1=r[3]; if(y0>y1){r[1]=y1; r[3]=y0;}*/ console.log(prms.crct);  }
 			else if(fnm=="SETMITERLIMIT") gst.mlimit = rU32(buff, loff);
-			else if(fnm=="SETTEXTCOLOR") {
-				prms.tclr = [buff[loff]/255, buff[loff+1]/255, buff[loff+2]/255];  loff+=4;
-			}
+			else if(fnm=="SETTEXTCOLOR") prms.tclr = [buff[loff]/255, buff[loff+1]/255, buff[loff+2]/255]; 
 			else if(fnm=="SETTEXTALIGN") prms.talg = rU32(buff, loff);
 			else if(fnm=="SETVIEWPORTEXTEX" || fnm=="SETVIEWPORTORGEX") {
 				if(prms.vbb==null) prms.vbb=[];
 				var coff = fnm=="SETVIEWPORTORGEX" ? 0 : 2;
 				prms.vbb[coff  ] = rI32(buff, loff);  loff+=4;
 				prms.vbb[coff+1] = rI32(buff, loff);  loff+=4;
-				FromEMF._updateCtm(prms, gst);
+				//console.log(prms.vbb);
+				if(fnm=="SETVIEWPORTEXTEX") FromEMF._updateCtm(prms, gst);
 			}
 			else if(fnm=="SETWINDOWEXTEX" || fnm=="SETWINDOWORGEX") {
 				var coff = fnm=="SETWINDOWORGEX" ? 0 : 2;
 				prms.wbb[coff  ] = rI32(buff, loff);  loff+=4;
 				prms.wbb[coff+1] = rI32(buff, loff);  loff+=4;
-				FromEMF._updateCtm(prms, gst);
+				if(fnm=="SETWINDOWEXTEX") FromEMF._updateCtm(prms, gst);
 			}
+			//else if(fnm=="SETMETARGN") {}
 			else if(fnm=="COMMENT") {  var ds = rU32(buff, loff);  loff+=4;  }
 			
 			else if(fnm=="SELECTOBJECT") {
 				var ind = rU32(buff, loff);  loff+=4;
-				//console.log(ind.toString(16), tab[ind]);
+				//console.log(ind.toString(16), tab, tab[ind]);
 				if     (ind==0x80000000) {  prms.fill=true ;  gst.colr=[1,1,1];  } // white brush
 				else if(ind==0x80000005) {  prms.fill=false;  } // null brush
 				else if(ind==0x80000007) {  prms.strk=true ;  prms.lwidth=1;  gst.COLR=[0,0,0];  } // black pen
 				else if(ind==0x80000008) {  prms.strk=false;  } // null  pen
 				else if(ind==0x8000000d) {} // system font
+				else if(ind==0x8000000e) {}  // device default font
 				else {
 					var co = tab[ind];  //console.log(ind, co);
 					if(co.t=="b") {
@@ -165,11 +167,14 @@
 				//console.log(ofs,ops,crs);
 				loff+=16;
 				var ofD = rU32(buff, loff);  loff+=4;  //console.log(ops, ofD, loff, ofs+off-8);
-				ofs += off-8;
+				ofs += off-8;  //console.log(crs, ops);
 				var str = "";
-				for(var i=0; i<crs; i++) str+=String.fromCharCode(rU(buff,ofs+i*2));
+				for(var i=0; i<crs; i++) {  var cc=rU(buff,ofs+i*2);  str+=String.fromCharCode(cc);  };
 				var oclr = gst.colr;  gst.colr = prms.tclr;
+				//console.log(str, gst.colr, gst.font.Tm);
+				//var otfs = gst.font.Tfs;  gst.font.Tfs *= 1/gst.ctm[0];
 				genv.PutText(gst, str, str.length*gst.font.Tfs*0.5);  gst.colr=oclr;
+				//gst.font.Tfs = otfs;
 				//console.log(rfx, rfy, scx, ops, rcX, rcY, rcW, rcH, offDx, str);
 			}
 			else if(fnm=="BEGINPATH") {  UDOC.G.newPath(gst);  }
@@ -188,6 +193,19 @@
 				if(!isTo) FromEMF._draw(genv,gst,prms, ndf);
 				//console.log(prms, gst.lwidth);
 				//console.log(JSON.parse(JSON.stringify(gst.pth)));
+			}
+			else if(fnm=="POLYPOLYGON16") {
+				loff+=16;
+				var ndf = fnm.startsWith("POLYPOLYGON"), isTo = fnm.indexOf("TO")!=-1;
+				var nop = rU32(buff, loff);  loff+=4;  loff+=4;
+				var pi = loff;  loff+= nop*4;
+				
+				if(!isTo) UDOC.G.newPath(gst);
+				for(var i=0; i<nop; i++) {
+					var ppp = rU(buff, pi+i*4);
+					loff = FromEMF._drawPoly(buff,loff,ppp,gst, fnm.endsWith("16")?2:4, ndf, isTo);
+				}
+				if(!isTo) FromEMF._draw(genv,gst,prms, ndf);
 			}
 			else if(fnm=="POLYBEZIER" || fnm=="POLYBEZIER16" || fnm=="POLYBEZIERTO" || fnm=="POLYBEZIERTO16") {
 				loff+=16;
@@ -234,17 +252,6 @@
 					else throw "e";
 				}
 			}
-			/*
-			else if(fnm=="POLYPOLYGON") {
-				var nop = rU(buff, loff);  loff+=2;
-				var pi = loff;  loff+= nop*2;
-				
-				for(var i=0; i<nop; i++) {
-					var ppp = rU(buff, pi+i*2);
-					loff = FromEMF._drawPoly(buff,loff,ppp,gst, true);
-				}
-				FromEMF._draw(genv, gst, prms);
-			}*/
 			else if(fnm=="SETSTRETCHBLTMODE") {  var sm = rU32(buff, loff);  loff+=4;  }
 			else if(fnm=="STRETCHDIBITS") {
 				var bx = FromEMF._readBox(buff, loff);  loff+=16;
@@ -338,15 +345,17 @@
 	
 	FromEMF._updateCtm = function(prms, gst) {
 		var mat = [1,0,0,1,0,0];
-		var wbb = prms.wbb, bb = prms.bb, vbb=prms.vbb ? prms.vbb:prms.bb;
+		var wbb = prms.wbb, bb = prms.bb, vbb=(prms.vbb && prms.vbb.length==4) ? prms.vbb:prms.bb;
+		
+		//var y0 = bb[1], y1 = bb[3];  bb[1]=Math.min(y0,y1);  bb[3]=Math.max(y0,y1);
 		
 		UDOC.M.translate(mat, -wbb[0],-wbb[1]);
 		UDOC.M.scale(mat, 1/wbb[2], 1/wbb[3]);
 		
-		UDOC.M.scale(mat, vbb[2]/bb[2], vbb[3]/bb[3]);
+		UDOC.M.scale(mat, vbb[2], vbb[3]);
+		//UDOC.M.scale(mat, vbb[2]/(bb[2]-bb[0]), vbb[3]/(bb[3]-bb[1]));
 		
-		UDOC.M.scale(mat, bb[2]-bb[0],bb[3]-bb[1]);
-		UDOC.M.translate(mat, bb[0],bb[1]);
+		//UDOC.M.scale(mat, bb[2]-bb[0],bb[3]-bb[1]);
 		
 		gst.ctm = mat;
 	}

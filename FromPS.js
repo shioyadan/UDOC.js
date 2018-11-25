@@ -9,8 +9,8 @@
 	FromPS.Parse = function(buff, genv)
 	{
 		buff = new Uint8Array(buff);
-		
-		var str = FromPS.B.readASCII(buff, 0, buff.length);
+		var off = 0;  while(!(buff[off]==37 && buff[off+1]==33)) off++;
+		var str = FromPS.B.readASCII(buff, off, buff.length-off);
 		var lines = str.split(/[\n\r]+/);
 		
 		var crds = null;
@@ -31,7 +31,7 @@
 		
 		var os = [];	// operand stack
 		var ds = FromPS._getDictStack([],{});
-		var es = [{  typ:"file", val: {  buff:buff, off:0  }  }];	// execution stack
+		var es = [{  typ:"file", val: {  buff:buff, off:off  }  }];	// execution stack
 		var gs = [];
 		var env = FromPS._getEnv(crds);
 		var time = Date.now();
@@ -45,34 +45,41 @@
 	}
 	FromPS._getDictStack = function(adefs, aprcs) {
 		var defs = [
-			"def","begin","end","currentfile","currentdict","known","version","currentpacking","setpacking","currentglobal","setglobal",
+			"def","begin","end","currentfile","currentdict","known","version",
+			"currentpacking","setpacking","currentoverprint","setoverprint","currentglobal","setglobal",
+			"currentsystemparams","setsystemparams","currentuserparams","setuserparams","currentpagedevice","setpagedevice",
 			"currentflat",
-			"currentlinewidth","currentpoint","currentscreen","setscreen",
+			"currentlinewidth","currentpoint","currentscreen","setscreen","currenthalftone",
+			"currentblackgeneration","currentundercolorremoval","currentcolortransfer",
+			"internaldict",
 			"dict","string","readstring","readhexstring","readline","getinterval","putinterval","token",
-			"array","aload","astore","length","matrix","mark","counttomark",
+			"array","aload","astore","length","maxlength","matrix","mark","counttomark","cleartomark","dictstack","countdictstack",
 			"makefont","scalefont","stringwidth",
 			
-			"setfont", "setgray", "setrgbcolor","sethsbcolor", "setlinewidth", "setstrokeadjust","setflat","setlinecap","setlinejoin","setmiterlimit","setdash",
+			"setfont", "setgray","currentgray", "setrgbcolor","currentrgbcolor","sethsbcolor", "setlinewidth", "setstrokeadjust","setflat","setlinecap",
+			"setlinejoin","setmiterlimit","setdash",
 			"clip","eoclip","clippath","pathbbox",
-			"newpath", "stroke", "fill", "eofill", "closepath","showpage","print",
-			"moveto", "lineto", "curveto", "arc","arcn", "show","ashow","widthshow",
+			"newpath", "stroke", "fill", "eofill", "closepath","flattenpath","showpage","print",
+			"moveto", "lineto", "curveto", "arc","arcn", 
+			"show","ashow","xshow","yshow","xyshow","widthshow","awidthshow","charpath",
+			"cshow",
 			"rmoveto","rlineto","rcurveto",
-			"translate","rotate","scale","concat","concatmatrix","currentmatrix","setmatrix",
+			"translate","rotate","scale","concat","concatmatrix","invertmatrix","currentmatrix","defaultmatrix","setmatrix",
 			
-			"save","restore","gsave", "grestore",
+			"save","restore","gsave", "grestore","grestoreall",
 			"usertime","readtime",
-			"save", "restore","flush","readonly",
+			"save", "restore","flush","flushfile","readonly","executeonly",
 			
-			"findresource","defineresource","image","colorimage",
+			"findresource","defineresource","undefineresource","image","imagemask","colorimage",
 			
-			"xcheck",
+			"xcheck","status","cachestatus","setcachelimit","type",
 			
 			"if","ifelse","exec","stopped","dup","exch","copy","roll","index","pop","put","get","load","where","store","repeat","for","forall","loop","exit",
 			"bind",
-			"cvi","cvr","cvs","cvx",
+			"cvi","cvr","cvs","cvx","cvn","cvlit",
 			"add","sub","mul","div","idiv","bitshift","mod","exp","atan",
-			"neg","abs","round","truncate","sqrt","ln","sin","cos",
-			"srand","rand","==","transform","itransform","dtransform",
+			"neg","abs","floor","round","truncate","sqrt","ln","sin","cos",
+			"srand","rand","==","transform","itransform","dtransform","idtransform",
 			"eq","ge","gt","le","lt","ne",
 			"and","or","not",
 			"filter",
@@ -83,12 +90,11 @@
 		var withCtx = ["image", "colorimage", "repeat", "for","forall","loop"];
 		for(var i=0; i<withCtx.length; i++) defs.push(withCtx[i]+"---");
 		
-		var prcs = { 
+		var prcs = FromPS.makeProcs({ 
 			"findfont"    : "/Font findresource",
 			"definefont"  : "/Font defineresource",
 			"undefinefont": "/Font undefineresource"
-		};
-		prcs = FromPS.makeProcs(prcs);
+		});
 		for(var p in aprcs) prcs[p] = aprcs[p];
 		
 		var systemdict = {}, globaldict = {}, userdict = {}, statusdict = {};
@@ -96,7 +102,9 @@
 		systemdict["globaldict"] = {typ:"dict", val:globaldict};
 		systemdict["userdict"  ] = {typ:"dict", val:userdict  };
 		systemdict["statusdict"] = {typ:"dict", val:statusdict};
-		systemdict["null"] = {typ:"null", val:null};
+		systemdict["$error"    ] = {typ:"dict", val:{}};
+		systemdict["errordict" ] = {typ:"dict", val:FromPS.makeProcs({"handleerror":""})};
+		systemdict["null"]   = {typ:"null", val:null};
 		
 		for(var i=0; i<defs.length; i++) systemdict[defs[i]] = {  typ:"operator", val:defs[i]  };
 		for(var p in prcs)               systemdict[p] = prcs[p];
@@ -107,10 +115,14 @@
 		return {
 			bb:crds,
 			gst : UDOC.getState(crds),
-			pckn:false, amodeGlobal:false,
+			packing:false, overprint:false, global:false, systemparams:{"MaxPatternCache":5000},userparams:{},pagedevice:{},
 			cmnum:0, fnt:null,
 			res:{},
-			pgOpen:false
+			pgOpen:false,
+			funs: FromPS.makeProcs({ 
+				"blackgeneration"   : "",
+				"undercolorremoval" : "pop 0"
+			})
 		}
 	}
 	
@@ -141,9 +153,12 @@
 		var tok = getToken(es, ds);  if(tok==null) return false;
 		var typ = tok.typ, val = tok.val;
 		
-		if(!env.pgOpen && val!="end") {  genv.StartPage(env.bb[0], env.bb[1], env.bb[2], env.bb[3]);  env.pgOpen = true;   }
+		
 		
 		//console.log(tok, os.slice(0));
+		
+		//for(var i=0; i<os.length; i++)  if(os[i].typ=="real" && isNaN(os[i].val)) throw "e";
+		
 		/*ocnt++;
 		//if(ocnt>2*lcnt) {  lcnt=ocnt;  console.log(ocnt, os.length, file.stk.length);  };
 		if(ocnt>8000000) {  
@@ -151,7 +166,7 @@
 			console.log(Date.now()-otime, opoc);  throw "e";  
 		} */
 		
-		if(typ=="integer" || typ=="real" || typ=="boolean" || typ=="string" || typ=="array" || typ=="procedure" || typ=="null") {  os.push(tok);  return true;  }
+		if(["integer","real","dict","boolean","string","array","procedure","null"].indexOf(typ)!=-1) {  os.push(tok);  return true;  }
 	
 		if(typ!="name" && typ!="operator") throw "e";
 		
@@ -202,7 +217,8 @@
 				//if(omap[op]) op = omap[op];
 				
 				if(op=="def") {  var nv = os.pop(), nn = os.pop();  nn=nn.val.slice(1);  ds[ds.length-1][nn] = nv;  }
-				else if(op=="dict"   ) {  os.pop().val;  os.push({typ:"dict"  , val:{} });  }
+				else if(op=="internaldict") {  var l=os.pop().val;  os.push({typ:"dict"  , val:{}});  }
+				else if(op=="dict"   ) {  var l=os.pop().val;  os.push({typ:"dict"  , val:{}, maxl:l });  }
 				else if(op=="string" ) {  var l=os.pop().val;  os.push({typ:"string", val:new Array(l) });  }
 				else if(op=="readstring" || op=="readhexstring") {
 					var str = os.pop(), l=str.val.length, fl = os.pop().val;  //console.log(op, str);  throw "e";
@@ -232,9 +248,9 @@
 					os.push({typ:src.typ, val:out});
 				}
 				else if(op=="putinterval") {
-					var src=os.pop(), idx=os.pop().val, tgt=os.pop();
-					if(idx+src.val.length>=tgt.val.length) throw "e";
-					if(src.typ=="string") for(var i=0; i<src.val.length; i++) tgt.val[idx+i] = src.val[i];
+					var src=os.pop(), idx=os.pop().val, tgt=os.pop();  //console.log(tgt,idx,src);
+					if(idx+src.val.length>=tgt.val.length) {}  //throw "e";
+					else if(src.typ=="string") for(var i=0; i<src.val.length; i++) tgt.val[idx+i] = src.val[i];
 					else throw "e";
 					//console.log(src.val, tgt.val, idx);  throw "e";
 				}
@@ -259,16 +275,29 @@
 				}
 				else if(op=="length" ) {
 					var o = os.pop(), typ=o.typ, l=0;
-					if(typ=="array") l = o.val.length;
+					if     (typ=="array"    ) l = o.val.length;
 					else if(typ=="procedure") l = o.val.length;
+					else if(typ=="dict"     ) l = Object.keys(o.val).length;
+					else if(typ=="string"   ) l = o.val.length;
 					else {  console.log(o);  throw "e";  }
 					os.push({typ:"integer",val:l});
 				}
+				else if(op=="maxlength") {  var d=os.pop();  os.push({typ:"integer",val:d.maxl});  }
 				else if(op=="matrix" ) {  os.push({typ:"array", val:FromPS.makeArr([1,0,0,1,0,0],"real") });  }
 				else if(op=="mark"   ) {  os.push({typ:"mark"});  }
-				else if(op=="counttomark") {
-					var i=os.length-1;  while(i!=-1 && os[i].typ!="mark") i--;
-					os.push({typ:"integer",val:os.length-1-i});
+				else if(op=="counttomark" || op=="cleartomark") {
+					var mi = 0;  while(mi<os.length && os[os.length-1-mi].typ!="mark")mi++;
+					if(op=="cleartomark") for(var i=0; i<mi+1; i++) os.pop();
+					else os.push({typ:"integer",val:mi});
+				}
+				else if(op=="dictstack") {
+					var arr = os.pop();
+					for(var i=0; i<ds.length; i++) arr.val[i] = {typ:"dict",val:ds[i]};
+					os.push(arr);
+				}
+				else if(op=="countdictstack") {
+					var n=0;  for(var i=0; i<os.length; i++) if(os[i].typ=="dict") n++;
+					os.push({typ:"integer",val:n});
 				}
 				else if(op=="begin") {  var o = os.pop(), dct=o.val;   if(dct==null || o.typ!="dict") {  console.log(o, ds);  throw "e";  }  ds.push(dct);  }
 				else if(op=="end"  ) {  ds.pop();  }
@@ -276,28 +305,37 @@
 				else if(op=="currentdict") {  var dct=ds[ds.length-1];  os.push({typ:"dict", val:dct});  }
 				else if(op=="known") {  var key=os.pop().val.slice(1), dct=os.pop().val;  os.push({typ:"boolean",val:dct[key]!=null});  }
 				else if(op=="version") {  os.push({typ:"string", val:[51]});  } // "3"
-				else if(op=="currentpacking") {  os.push({typ:"boolean",val:env.pckn});  }
-				else if(op=="setpacking"    ) {  env.pckn = os.pop().val;  }
-				else if(op=="currentglobal" ) {  os.push({typ:"boolean",val:env.amodeGlobal});  }
-				else if(op=="setglobal"     ) {  env.amodeGlobal = os.pop().val;  }
+				else if(["currentpacking","currentoverprint","currentglobal","currentsystemparams","currentuserparams","currentpagedevice"].indexOf(op)!=-1) {  var nv = env[op.slice(7)];
+					os.push({typ:(typeof nv=="boolean")?"boolean":"dict",val:nv});  
+				}
+				else if(["setpacking","setoverprint","setglobal","setsystemparams","setuserparams","setpagedevice"].indexOf(op)!=-1) {  env[op.slice(3)] = os.pop().val;  }
 				else if(op=="currentflat"   ) {  os.push({typ:"real",val:1});  }
 				else if(op=="currentlinewidth") {  os.push({typ:"real",val:gst.lwidth});  }
 				else if(op=="currentpoint"   ) {  var im=gst.ctm.slice(0);  UDOC.M.invert(im);  var p=UDOC.M.multPoint(im,gst.cpos);  
 								os.push({typ:"real",val:p[0]}, {typ:"real",val:p[1]});  }
 				else if(op=="currentscreen"  ) {  os.push({typ:"int",val:60}, {typ:"real",val:0},{typ:"real",val:0});  }
 				else if(op=="setscreen"      ) {  os.pop();  os.pop();  os.pop();  }
+				else if(op=="currenthalftone") {  os.push({typ:"dict",val:{}});  }
+				else if(op=="currentblackgeneration" || op=="currentundercolorremoval") {  os.push(env.funs[op.slice(7)]);  }
+				else if(op=="currentcolortransfer") {  for(var i=0; i<4; i++) os.push(env.funs["blackgeneration"]);  }
 				else if(op=="findresource")
 				{
-					var cat = os.pop().val.slice(1), key = os.pop().val.slice(1);
-					if     (cat=="Font") {  rs = {typ:"font",val:UDOC.getFont()};  rs.val.Tf=key;  }
-					else if(cat=="ProcSet") rs = {typ:"dict",val:{}};
-					else throw("Unknown resource category: "+cat);
+					var cat = os.pop().val.slice(1), key = os.pop().val.slice(1), rs;
+					if     (cat=="Font"    ) {  rs = {typ:"font",val:UDOC.getFont()};  rs.val.Tf=key;  }
+					else if(cat=="ProcSet" ) rs = {typ:"dict",val:{}};
+					else if(cat=="Category") rs = {typ:"dict",val:{}};
+					else throw("Unknown resource category: "+cat+","+ key);
 					os.push(rs);
 				}
 				else if(op=="defineresource") {
 					var cat = os.pop().val.slice(1), ins = os.pop().val, key = os.pop().val.slice(1);
 					if(env.res[cat]==null) env.res[cat]={};
 					env.res[cat][key]=ins;
+					os.push(ins);
+				}
+				else if(op=="undefineresource") {
+					var cat = os.pop().val.slice(1), key = os.pop().val.slice(1);
+					if(env.res[cat]!=null) delete env.res[cat];
 				}
 				else if(op=="image" || op=="colorimage") {
 					var ncomp = 1, multi = false;
@@ -329,6 +367,7 @@
 						for(var j=0; j<dlen; j++) {  var tj=j*3, qj=(pind+j)*4;  img[qj+0]=row[tj+0];  img[qj+1]=row[tj+1];  img[qj+2]=row[tj+2];  }
 					}
 					pind += dlen;
+					FromPS.checkPageStarted(env,genv);
 					if(pind==w*h) genv.PutImage(gst, img, w, h);
 					else {  prm[7]=pind;  es.push(tok); 
 						FromPS.addProc(src0, es);  
@@ -357,16 +396,22 @@
 				else if(op=="setmiterlimit") gst.mlimit = os.pop().val;
 				else if(op=="setflat") gst.dd.flat=os.pop();
 				else if(op=="setdash"     ) {  gst.doff=os.pop().val;  gst.dash = FromPS.readArr(os.pop().val);  }
-				else if(op=="show"||op=="ashow"||op=="widthshow") {  
+				else if(op=="show"||op=="ashow"||op=="xshow"||op=="yshow"||op=="xyshow"||op=="widthshow"||op=="awidthshow"||op=="charpath") {  
+					if(op=="charpath" || op=="xshow" || op=="xyshow" || op=="yshow") os.pop();
 					var sar = os.pop().val, str=FromPS.readStr(sar); 
-					if(op=="widthshow") {  os.pop();  os.pop();  os.pop();  }
-					if(op=="ashow"    ) {  os.pop();  os.pop();  }
+					if(op=="awidthshow") {  os.pop();  os.pop();  os.pop();  os.pop(); }
+					if(op=="widthshow" ) {  os.pop();  os.pop();  os.pop();  }
+					if(op=="ashow"     ) {  os.pop();  os.pop();  }
 					var om = gst.ctm;  gst.ctm = om.slice(0);  gst.ctm[4]=gst.cpos[0];  gst.ctm[5]=gst.cpos[1];//UDOC.M.translate(gst.ctm,gst.cpos[0],gst.cpos[1]);
+					FromPS.checkPageStarted(env,genv);
 					genv.PutText(gst, str, str.length*0.55);  gst.cpos[0] += str.length*UDOC.M.getScale(om)*gst.font.Tfs*0.55;  //console.log(str, gst.font.Tfs);
 					gst.ctm = om;
 				}
+				else if(op=="cshow") {  os.pop();  os.pop();  }
 				else if(op=="setgray"    ) {  var g=FromPS.nrm(os.pop().val);  gst.colr = gst.COLR = [g,g,g];  }
+				else if(op=="currentgray") {  os.push({typ:"real", val:(gst.colr[0]+gst.colr[1]+gst.colr[2])/3});  }
 				else if(op=="setrgbcolor") {  var b=os.pop().val,g=os.pop().val,r=os.pop().val;  gst.colr = gst.COLR = [FromPS.nrm(r),FromPS.nrm(g),FromPS.nrm(b)];  }
+				else if(op=="currentrgbcolor") {  for(var i=0; i<3; i++) os.push({typ:"real", val:gst.colr[i]});  }
 				else if(op=="sethsbcolor") {
 					var v=os.pop().val,s=os.pop().val,h=os.pop().val;
 					var r, g, b, i, f, p, q, t;
@@ -388,8 +433,25 @@
 				else if(op=="clip" || op=="eoclip") {  
 					var bbN = UDOC.G.getBB(gst.pth .crds);
 					var bbO = UDOC.G.getBB(gst.cpth.crds);
-					if(gst.pth.cmds.length==5 && UDOC.G.insideBox(bbO,bbN)) {}  // clipping with a box, that contains a current clip path
-					else   gst.cpth = JSON.parse(JSON.stringify(gst.pth ));  
+					if     (UDOC.G.isBox(gst.pth, bbN) && UDOC.G.insideBox(bbO,bbN)) {  }  // clipping with a box, that contains a current clip path
+					else if(UDOC.G.isBox(gst.cpth,bbO) && UDOC.G.insideBox(bbN,bbO)) {  gst.cpth = JSON.parse(JSON.stringify(gst.pth));  }
+					else {
+						var p0 = UDOC.G.toPoly(gst.pth), p1 = UDOC.G.toPoly(gst.cpth);
+						if(p0 && p1) {
+							//console.log(gst.pth, gst.cpth);
+							var p = UDOC.G.polyClip(p0, p1);
+							//console.log(p0, p1, p);
+							if(p.length!=0) gst.cpth = UDOC.G.fromPoly(p);
+							else console.log("strange intersection of polygons");
+						}
+						else {
+							// do an advanced shape - shape intersection
+							//console.log("replacing clipping path");
+							//console.log(bbO, gst.cpth);
+							//console.log(bbN, gst.pth );
+							gst.cpth = JSON.parse(JSON.stringify(gst.pth ));  
+						}
+					}
 				}
 				else if(op=="clippath" ) {  gst.pth  = JSON.parse(JSON.stringify(gst.cpth));  }
 				else if(op=="pathbbox" ) {
@@ -403,10 +465,11 @@
 					os.push(bb[0],bb[1],bb[2],bb[3]);
 				}
 				else if(op=="newpath"  ) UDOC.G.newPath(gst);
-				else if(op=="stroke"              ) {  genv.Stroke(gst);  UDOC.G.newPath(gst);  }
-				else if(op=="fill" || op=="eofill") {  genv.Fill(gst, op=="eofill");    UDOC.G.newPath(gst);  }
+				else if(op=="stroke"              ) {  FromPS.checkPageStarted(env,genv);  genv.Stroke(gst);  UDOC.G.newPath(gst);  }
+				else if(op=="fill" || op=="eofill") {  FromPS.checkPageStarted(env,genv);  genv.Fill(gst, op=="eofill");    UDOC.G.newPath(gst);  }
 				else if(op=="closepath") UDOC.G.closePath(gst);
-				else if(op=="showpage" ) {  genv.ShowPage ();  var ofnt=gst.font;  gst = env.gst = UDOC.getState(env.bb);  gst.font=ofnt;  env.pgOpen = false;  }
+				else if(op=="flattenpath") {}
+				else if(op=="showpage" ) {  FromPS.checkPageStarted(env,genv);  genv.ShowPage ();  var ofnt=gst.font;  gst = env.gst = UDOC.getState(env.bb);  gst.font=ofnt;  env.pgOpen = false;  }
 				else if(op=="print"    ) {  var sar = os.pop().val, str=FromPS.readStr(sar);  genv.Print(str);  }
 				else if(op=="moveto"  || op=="lineto" ) {
 					var y = os.pop().val, x = os.pop().val;
@@ -448,8 +511,13 @@
 					var m = m1.slice(0);  UDOC.M.concat(m, m2);  m = FromPS.makeArr(m, "real");
 					os.push({typ:"array",val:m});
 				}
-				else if(op=="currentmatrix") {
-					var m = os.pop(), cm = FromPS.makeArr(gst.ctm,"real");  // console.log(m, cm);  throw "e";
+				else if(op=="invertmatrix") { var rA = FromPS.readArr;
+					var m2 = rA(os.pop().val), m1 = rA(os.pop().val);
+					var m = m1.slice(0);  UDOC.M.invert(m);  m = FromPS.makeArr(m, "real");
+					os.push({typ:"array",val:m});
+				}
+				else if(op=="currentmatrix" || op=="defaultmatrix") {
+					var m = os.pop(), cm = FromPS.makeArr(op=="currentmatrix"?gst.ctm:[1,0,0,1,0,0],"real");
 					for(var i=0; i<6; i++) m.val[i]=cm[i];   os.push(m);
 				}
 				else if(op=="setmatrix") {
@@ -486,6 +554,10 @@
 					//else {  console.log(o);  throw "e";  }
 					os.push(o);
 				}
+				else if(op=="cvn") {
+					os.push({typ:"name",val:FromPS.readStr(os.pop().val)});
+				}
+				else if(op=="cvlit") {}
 				else if(["add","sub","mul","div","idiv","bitshift","mod","exp","atan"].indexOf(op)!=-1) {
 					var o1 = os.pop(), o0 = os.pop(), v0=o0.val, v1=o1.val, out = 0, otp = "";
 					if(op=="add" || op=="sub" || op=="mul") otp = (o0.typ=="real" || o1.typ=="real") ? "real" : "integer";
@@ -508,16 +580,17 @@
 					if(otp=="real") {  f32[0]=out;  out=f32[0];  }
 					os.push({ typ:otp, val:out });
 				}
-				else if(["neg","abs","round","truncate","sqrt","ln","sin","cos"].indexOf(op)!=-1) {
+				else if(["neg","abs","floor","round","truncate","sqrt","ln","sin","cos"].indexOf(op)!=-1) {
 					var o0 = os.pop(), v0=o0.val, out = 0, otp = "";
 					if(op=="neg" || op=="abs" || op=="truncate") otp=o0.typ;
-					else if(op=="round") otp="integer";
+					else if(op=="round" || op=="floor") otp="integer";
 					else if(op=="sqrt" || op=="sin" || op=="cos" || op=="ln") otp="real";
 					
 					if(o0.typ=="real") {  f32[0]=v0;  v0=f32[0];  }
 					
 					if(op=="neg" ) out = -v0;
 					if(op=="abs" ) out = Math.abs(v0);
+					if(op=="floor")out = Math.floor(v0);
 					if(op=="round")out = Math.round(v0);
 					if(op=="truncate") out = Math.trunc(v0);
 					if(op=="sqrt") out = Math.sqrt(v0);
@@ -553,7 +626,7 @@
 					os.push({typ:ints?"integer":"boolean", val:out});
 				}
 				else if(op=="if") {
-					var proc = os.pop(), cnd = os.pop().val;
+					var proc = os.pop(), cnd = os.pop().val;  //console.log(cnd);
 					if(cnd) FromPS.addProc(proc, es);//FromPS.callProcedure(proc, file, os, ds, es, gs, gst, genv);
 				}
 				else if(op=="ifelse") {
@@ -561,11 +634,11 @@
 					FromPS.addProc(cnd?proc1:proc2, es);
 				}
 				else if(op=="exec" || op=="stopped") {  var obj = os.pop();  
-					if(op=="stopped") os.push({typ:"boolean", val:false});
-				
+					if(op=="stopped") FromPS.addProc({typ:"procedure",val:[{typ:"boolean", val:false}]},es);  //os.push({typ:"boolean", val:false});
+					
 					if(obj.typ=="procedure") FromPS.addProc(obj, es);  
-					else if(obj.typ=="name") FromPS.addProc({typ:"procedure",val:[obj]},es);
-					else throw "unknown executable type: "+obj.typ;
+					else if(obj.typ=="name" || obj.typ=="operator" || obj.typ=="real" || obj.typ=="array") FromPS.addProc({typ:"procedure",val:[obj]},es);
+					else {  console.log(obj);  throw "unknown executable type: "+obj.typ;  }
 				}
 				else if(op=="dup" ) {  var v=os.pop();  os.push(v,v);  }
 				else if(op=="exch") {  os.push(os.pop(), os.pop());  }
@@ -579,6 +652,11 @@
 						for(var i=0; i<m.length; i++) {  n.val[i]=m[i];  if(m[i].val==null) {  console.log(ds);  throw "e"; }  }
 						os.push(n);
 					}
+					else if(n.typ=="dict") {
+						var m = os.pop().val;
+						for(var prp in m) {  n.val[prp]=m[prp];  }
+						os.push(n);
+					}
 					else throw "e";
 				}
 				else if(op=="roll") {  var j=os.pop().val, n = os.pop().val;
@@ -588,29 +666,32 @@
 					for(var i=0; i<n; i++) os.push(els[i]);
 				}
 				else if(op=="index") {  var n=os.pop().val;  os.push(os[os.length-1-n]);  }
-				else if(op=="transform" || op=="itransform" || op=="dtransform") {
+				else if(op=="transform" || op=="itransform" || op=="dtransform" || op=="idtransform") {
 					var m = os.pop(), y=0, x=0;  //console.log(m);
 					if(m.typ=="array") { m = FromPS.readArr(m.val);  y = os.pop().val;  }
 					else               { y = m.val;  m = gst.ctm.slice(0);  }
-					if(op=="itransform") {  UDOC.M.invert(m);  }
+					if(op=="itransform"||op=="idtransform") {  UDOC.M.invert(m);  }
 					x = os.pop().val;
 					var np = UDOC.M.multPoint(m, [x,y]);
-					if(op=="dtransform") {  np[0]-=m[4];  np[1]-=m[5];  }
+					if(op=="dtransform"||op=="idtransform") {  np[0]-=m[4];  np[1]-=m[5];  }
+					//if(isNaN(np[0])) {  console.log(m,gst.ctm.slice(0),x,y);  throw "e";  }
 					os.push({typ:"real",val:np[0]},{typ:"real",val:np[1]});
 				}
-				else if(op=="pop" || op=="srand" || op=="==" ) {  os.pop();   }
+				else if(op=="pop" || op=="srand" || op=="==" ) {  os.pop();  }
 				else if(op=="rand") {  os.push({typ:"integer",val:Math.floor(Math.random()*0x7fffffff)});  }
 				else if(op=="put" ) {  
-					var val=os.pop(), o=os.pop(), obj=os.pop(), otp=obj.typ;  //console.log(obj,o,val);  throw "e";
+					var val=os.pop(), o=os.pop(), obj=os.pop(), otp=obj.typ;  //console.log(obj,o,val);  //throw "e";
 					if(otp=="array") obj.val[o.val] = val;
 					else if(otp=="dict")  obj.val[o.val.slice(1)]=val;
-					else throw "e";
+					else if(otp=="string") obj.val[o.val] = val.val;
+					else throw otp+" e";
 					//.val.slice(1), obj=os.pop();  obj.val[key]=obj.typ=="string" ? val.val : val;  
 				}
 				else if(op=="get" ) {  
 					var o=os.pop(), obj=os.pop(), otp=obj.typ; //  console.log(o, obj);
 					if     (otp=="string") os.push({typ:"integer",val:obj.val[o.val]}); 
 					else if(otp=="array" ) os.push(obj.val[o.val]);
+					else if(otp=="dict"  ) {var v =obj.val[o.val.slice(1)];  /*if(v==null) {  console.log(obj.val, o.val);  throw "e";  }*/  os.push(v);  }
 					else throw "getting from unknown type "+  obj.typ;  //os.push(obj.val[key]);  
 				}
 				else if(op=="load") {  var key=os.pop().val.slice(1), val = FromPS.getFromStacks(key, ds);  
@@ -667,8 +748,14 @@
 				else if(op=="forall---") {
 					var ctx=tok.ctx, proc=ctx[0],obj=ctx[1],i=ctx[2];
 					if(obj.typ=="dict") {
-						throw "e";
-						for(var p in obj.val) {  FromPS.addProcedure(proc.val, file);  FromPS.addProcedure([obj.val[p]], file);  }
+						var keys = Object.keys(obj.val);  //console.log(keys, obj.val, proc);
+						if(i<keys.length) {
+							es.push(tok);  FromPS.addProc(proc, es);  
+							os.push({typ:"name",val:"/"+keys[i]});
+							os.push(obj.val[keys[i]]);  ctx[2]++;
+							//console.log(keys[i], obj.val[keys[i]]);
+							//for(var p in obj.val) {  FromPS.addProcedure(proc.val, file);  FromPS.addProcedure([obj.val[p]], file);  }
+						}
 					}
 					else if(obj.typ=="procedure" || obj.typ=="array") {
 						if(i<obj.val.length) {
@@ -681,8 +768,8 @@
 				}
 				else if(op=="exit") {
 					var i = es.length-1;
-					while(es[i].typ!="name" || !es[i].val.endsWith("---")) i--;
-					while(es.length>i) es.pop();
+					while(i!=0 && (es[i].typ!="name" || !es[i].val.endsWith("---"))) i--;
+					if(i!=0) while(es.length>i) es.pop();
 					//console.log(es,i);  throw "e";
 				}
 				else if(op=="bind") {  
@@ -698,12 +785,24 @@
 					os.push({typ:"boolean",val:(typ=="procedure")});
 					//console.log(obj);  throw "e";
 				}
+				else if(op=="status"  ) {  var str = os.pop();  os.push({typ:"boolean",val:false});  }
+				else if(op=="cachestatus") {  for(var i=0; i<7; i++) os.push({typ:"integer",val:5000});  }
+				else if(op=="setcachelimit") {  os.pop();  }
+				else if(op=="type"    ) {
+					var o = os.pop();
+					var tps = {"name":"nametype","dict":"dicttype","boolean":"booleantype","procedure":"operatortype","string":"stringtype","null":"nulltype",
+								"integer":"integertype","array":"arraytype","operator":"operatortype","real":"realtype"};  
+					if(tps[o.typ]==null) {  console.log(o);  throw o.typ;  }
+					os.push({typ:"name",val:"/"+tps[o.typ]})
+				}
 				else if(op=="save"    ) {  os.push({typ:"state",val:JSON.parse(JSON.stringify(gst))});   }
 				else if(op=="restore" ) {  gst = env.gst = os.pop().val;  }
 				else if(op=="gsave"   ) {  gs.push(JSON.parse(JSON.stringify(gst)));  }
 				else if(op=="grestore") {  gst = env.gst = gs.pop();  }
+				else if(op=="grestoreall") {  while(gs.length!=0) gst = env.gst = gs.pop();  }
 				else if(op=="usertime" || op=="realtime") os.push({typ:"integer",val:(op=="usertime"?(Date.now()-otime):Date.now())});
-				else if(op=="flush" || op=="readonly") {}
+				else if(op=="flush" || op=="readonly" || op=="executeonly") {}
+				else if(op=="flushfile") os.pop();
 				else if(op=="filter") {
 					var fname = os.pop().val.slice(1), sarr;
 					if(fname=="ASCII85Decode") {
@@ -712,7 +811,10 @@
 					else if(fname=="RunLengthDecode") {
 						var sfile = os.pop().val;   sarr = FromPS.F.RunLengthDecode(sfile);
 					}
-					else throw fname;
+					else if(fname=="SubFileDecode") {
+						var sfile = os.pop().val;   sarr = new Uint8Array(sfile);
+					}
+					else {  console.log(os);  throw fname;  }
 					os.push({typ:"file", val:{buff:sarr, off:0, stk:[], env:{pckn:false}}});
 				}
 				else if(op=="begincmap" || op=="endcmap") {}
@@ -741,6 +843,7 @@
 	}
 	FromPS.strToInt = function(str)  {  var v=0;  for(var i=0; i<str.length; i++) v = (v<<8)|str[i];  return v;  }
 
+	FromPS.checkPageStarted = function(env,genv) {  if(!env.pgOpen) {  genv.StartPage(env.bb[0], env.bb[1], env.bb[2], env.bb[3]);  env.pgOpen = true;   }  }
 	
 	FromPS.F = {
 		HexDecode : function(file) {

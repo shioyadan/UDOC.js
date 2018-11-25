@@ -36,8 +36,6 @@
 		var ps = tr["/Root"]["/Pages"];
 		if(ps.typ=="ref") tr["/Root"]["/Pages"] = FromPDF.getIndirect(ps.ind,ps.gen,file,xr)
 		
-		//console.log(tr);
-		
 		var stk = [tr["/Root"]["/Pages"]];
 		
 		while(stk.length!=0) {
@@ -52,11 +50,11 @@
 		}
 		
 		var time = Date.now();
-		FromPDF.render(tr["/Root"], genv);
+		FromPDF.render(tr["/Root"], genv, tr);
 		genv.Done();
 		//console.log(Date.now()-time);
 	}
-	FromPDF.render = function(root, genv)
+	FromPDF.render = function(root, genv, tr)
 	{		
 		var ops = [
 			"CS","cs","SCN","scn","SC","sc","sh",
@@ -105,7 +103,7 @@
 				for(var i=ks.length-1; i>=0; i--) stk.push(ks[i]);
 				continue;
 			}
-			pi++;  //if(pi!=2) continue;  
+			pi++;  //if(pi!=1) continue;  
 			
 			var cts = pg["/Contents"];   //console.log(pg);
 			if(cts.length==null) cts = [cts];
@@ -119,20 +117,22 @@
 			var es = [];
 			
 			genv.StartPage(bb[0],bb[1],bb[2],bb[3]);
+			if(tr["/Encrypt"]) {  if(stk.length==0) alert("Encrypted PDF is not supported yet.");  }
+			else
 			for(var j=0; j<cts.length; j++)
 			{
-				var cnt = cts[j]["stream"];
+				var cnt = FromPDF.GS(cts[j]);  var end=cnt.length-1;  while(cnt[end]==0) end--;
+				cnt = new Uint8Array(cnt.buffer, 0, end+1);
 				//console.log(FromPS.B.readASCII(cnt,0,cnt.length));
 				es.push({  typ:"file", val: {  buff:cnt, off:0, extra:pg  }  });	// execution stack
 				var repeat = true;
-				while(repeat) repeat = FromPS.step(os, ds, es, gs, env, genv, FromPDF.operator);
+				while(repeat) {  repeat = FromPS.step(os, ds, es, gs, env, genv, FromPDF.operator);  }
 			}
 			genv.ShowPage();  //if(pi>23) break;
 		}
 	}
 	FromPDF.operator = function(op, os, ds, es, gs, env, genv)
 	{
-		//console.log(op);
 		var gst = env.gst;
 		var lfi = es.length-1;  while(es[lfi].typ!="file") lfi--;
 		var fle = es[lfi].val;
@@ -140,7 +140,7 @@
 		if(op=="Do") {
 			var nam = os.pop().val, xo = res["/XObject"][nam];
 			//console.log(xo);
-			var st=xo["/Subtype"], stm = xo["stream"];
+			var st=xo["/Subtype"], stm = FromPDF.GS(xo);
 			if(st=="/Form")  {
 				//console.log(FromPS.B.readASCII(stm,0,stm.length));
 				es.push( {typ:"file", val: { buff:stm, off:0, extra:xo }}  );
@@ -152,7 +152,8 @@
 				var img = FromPDF.getImage(xo, gst);
 				if(xo["/ImageMask"]==true) {
 					sms = img;
-					img = new Uint8Array(w*h*4), r0 = gst.colr[0]*255, g0 = gst.colr[1]*255, b0 = gst.colr[2]*255;
+					img = new Uint8Array(w*h*4);  
+					var r0 = gst.colr[0]*255, g0 = gst.colr[1]*255, b0 = gst.colr[2]*255;
 					for(var i=0; i<w*h*4; i+=4) {  img[i]=r0;  img[i+1]=g0;  img[i+2]=b0;  img[i+3]=255;  }
 				}
 				genv.PutImage(gst, img, w,h, sms);
@@ -274,13 +275,17 @@
 				else cs = (typeof sps[csi] == "string") ? sps[csi] : sps[csi][0];
 			}
 			else cs = csi;
-			//console.log(res, cs, os.slice(0));
+			//console.log(sps, cs, os.slice(0));
 			if(cs=="/Lab" || cs=="/DeviceRGB" || cs=="/DeviceN" || (cs=="/ICCBased" && sps[csi][1]["/N"]==3)) {  
 					c=[os.pop().val, os.pop().val, os.pop().val];  c.reverse();  }
 			else if(cs=="/DeviceCMYK" || (cs=="/ICCBased" && sps[csi][1]["/N"]==4)) {  
 					var cmyk=[os.pop().val,os.pop().val,os.pop().val,os.pop().val];  cmyk.reverse();  c = UDOC.C.cmykToRgb(cmyk);  }
 			else if(cs=="/DeviceGray" || cs=="/CalGray") {  var gv=FromPS.nrm(os.pop().val);  c=[gv,gv,gv];  }
-			else if(cs=="/Separation") {  var lab = FromPDF.Func(sps[csi][3], [os.pop().val]);  c = UDOC.C.labToRgb(lab);  }
+			else if(cs=="/Separation") {  
+				var cval = FromPDF.Func(sps[csi][3], [os.pop().val]);  
+				if(sps && sps[csi] && sps[csi][2]=="/DeviceCMYK") c = UDOC.C.cmykToRgb(cval); 
+				else c = UDOC.C.labToRgb(cval); 
+			}
 			else if(cs=="/Pattern")    {  
 				//*
 				var pt = res["/Pattern"][os.pop().val];  //console.log(pt);
@@ -310,7 +315,6 @@
 		else if(op=="EMC"|| op=="BX" || op=="EX") {  }
 		else 
 			throw ("Unknown operator", op);
-		
 	}
 
 	
@@ -334,6 +338,7 @@
 	}
 	
 	FromPDF.getGrad = function(fn, cs) {
+		//console.log(fn,cs);
 		var F = FromPDF._normColor;
 		var fs = fn["/Functions"], ft = fn["/FunctionType"], bs = fn["/Bounds"], enc = fn["/Encode"];
 		//console.log(fn);
@@ -351,23 +356,26 @@
 	FromPDF._normColor = function(fn, vls, cs) {
 		//console.log(fn, vls, cs);
 		var clr = FromPDF.Func(fn, vls);
-		if(cs[3] && cs[3].stream) {
+		if(cs[3] && cs[3]["/Length"]) {
 			clr = FromPDF.Func(cs[3], clr);
 			//console.log(clr);
 			if(cs[2]=="/DeviceCMYK" || clr.length==4) {  clr = UDOC.C.cmykToRgb(clr);  }
 			else {  console.log(clr, cs);  throw "unknown color profile";  }
 			//console.log(clr);
 		}
+		else if((cs[1] && cs[1]["/N"]==4)
+			|| cs=="/DeviceCMYK") clr = UDOC.C.cmykToRgb(clr);
 		//if(clr.length<3) {  console.log(clr.slice(0));  throw "e";  clr.push(1);  }
 		return clr;
 	}
 	
 	FromPDF.getImage = function(xo, gst) {
-		var w=xo["/Width"], h=xo["/Height"], ar = w*h, ft=xo["/Filter"], cs=xo["/ColorSpace"], bpc=xo["/BitsPerComponent"], stm=xo["stream"], mte=xo["/Matte"];
+		var w=xo["/Width"], h=xo["/Height"], ar = w*h, stm=FromPDF.GS(xo), ft=xo["/Filter"], cs=xo["/ColorSpace"], bpc=xo["/BitsPerComponent"], mte=xo["/Matte"];
 		//if(w==295 && h==98) console.log(xo);
 		//if(w=="327" && h==9) console.log(xo);
 		var img = xo["image"];  //console.log(xo);
 		if(img==null) {
+			//console.log(xo);
 			var msk = xo["/Mask"];
 			if(cs && cs[0]=="/Indexed") {
 				var pte;
@@ -375,8 +383,8 @@
 					var str = cs[3];  pte = new Uint8Array(256*3);
 					for(var i=0; i<str.length; i++) pte[i] = str.charCodeAt(i);
 				}							
-				else pte = cs[3]["stream"];
-				if(cs[1]=="/DeviceCMYK") {
+				else pte = FromPDF.GS(cs[3]);
+				if(cs[1]=="/DeviceCMYK" || (cs[1] && cs[1][1] && cs[1][1]["/N"]==4)) {
 					var opte = pte, pte = new Uint8Array(256*3);
 					for(var i=0; i<256; i++) {  var qi=(i<<2), ti=qi-i, rgb = UDOC.C.cmykToRgb([opte[qi]/255, opte[qi+1]/255, opte[qi+2]/255, opte[qi+3]/255]);  
 						pte[ti]=rgb[0]*255;  pte[ti+1]=rgb[1]*255;  pte[ti+2]=rgb[2]*255;  
@@ -394,9 +402,33 @@
 				FromPDF.plteImage(stm, 0, nc, bpc==1?pte:null, w, h, bpc, msk);
 				img=nc;
 			}
+			else if(ft==null && cs && cs[0]=="/ICCBased" && cs[1] && cs[1]["/N"]==4) {  // CMYK
+				var nc = new Uint8Array(ar*4), cmy=[0,0,0,0];
+				for(var i=0; i<ar; i++) {
+					var qi = i*4;  cmy[0]=stm[qi]*(1/255);  cmy[1]=stm[qi+1]*(1/255);  cmy[2]=stm[qi+2]*(1/255);   cmy[3]=stm[qi+3]*(1/255);  
+					var rgb = UDOC.C.cmykToRgb(cmy);
+					nc[qi  ]=~~(rgb[0]*255+0.5);  
+					nc[qi+1]=~~(rgb[1]*255+0.5);  
+					nc[qi+2]=~~(rgb[2]*255+0.5);  
+					nc[qi+3]=255;  
+				}
+				img = nc;
+			}
 			else if(w*h*3<=stm.length) {
+				var mlt = Math.round(255/((1<<bpc)-1));
+				var bpl = Math.ceil(w*3*bpc/8);
 				var nc = new Uint8Array(ar*4);
-				for(var i=0; i<ar; i++) {  var ti=i*3, qi=i*4;  nc[qi]=stm[ti];  nc[qi+1]=stm[ti+1];  nc[qi+2]=stm[ti+2];  nc[qi+3]=255;  }
+				for(var y=0; y<h; y++) {
+					var so = bpl * y; 
+					for(var x=0; x<w; x++)
+					{  
+						var qi=(y*w+x)*4, tx=3*x; 
+						nc[qi  ]=FromPDF.getBitNum(stm, so, tx  , bpc);  
+						nc[qi+1]=FromPDF.getBitNum(stm, so, tx+1, bpc);  
+						nc[qi+2]=FromPDF.getBitNum(stm, so, tx+2, bpc);  
+						nc[qi+3]=255;  
+					}
+				}
 				img = nc;
 			}
 			else {  img = stm;  }
@@ -419,11 +451,7 @@
 		for(var y=0; y<h; y++) {
 			var so = off + bpl * y; 
 			for(var x=0; x<w; x++) {  
-				var ci = 0;
-				if     (bpc==8) ci = buff[so+x];
-				else if(bpc==4) ci=(buff[so+(x>>1)]>>((1-(x&1))<<2))&15;
-				else if(bpc==2) ci=(buff[so+(x>>2)]>>((3-(x&3))<<1))&3;  
-				else if(bpc==1) ci=(buff[so+(x>>3)]>>((7-(x&7))<<0))&1;
+				var ci = FromPDF.getBitNum(buff, so, x, bpc);
 				var qi = (y*w+x)<<2;  
 				if(plt) {  var c =ci*3;    img[qi]=plt[c];  img[qi+1]=plt[c+1];  img[qi+2]=plt[c+2];  }
 				else    {  var nc=ci*mlt;  img[qi]=nc;      img[qi+1]=nc;        img[qi+2]=nc;        }
@@ -431,6 +459,14 @@
 				if(msk && msk[0]<=ci && ci<=msk[1]) img[qi+3]=0; 
 			}
 		}
+	}
+	FromPDF.getBitNum = function(buff, so, x, bpc) {
+		var ci = 0;
+		if     (bpc==8) ci = buff[so+x];
+		else if(bpc==4) ci=(buff[so+(x>>1)]>>((1-(x&1))<<2))&15;
+		else if(bpc==2) ci=(buff[so+(x>>2)]>>((3-(x&3))<<1))&3;  
+		else if(bpc==1) ci=(buff[so+(x>>3)]>>((7-(x&7))<<0))&1;
+		return ci;
 	}
 	
 	FromPDF.Func = function(f, vls)
@@ -448,7 +484,7 @@
 				vls[i] = Math.max(0, Math.min(sz[i]-1, ei));
 			}
 			for(var j=0; j<n; j++) {
-				var x = Math.round(vls[0]), rj = f["stream"][n*x+j];
+				var x = Math.round(vls[0]), rj = FromPDF.GS(f)[n*x+j];
 				rj = FromPDF.intp(rj, 0,255, dec[2*j],dec[2*j+1]);
 				out.push(rj);
 			}
@@ -465,8 +501,8 @@
 			var ds = FromPS._getDictStack([], {});
 			var es = [];
 			
-			//console.log(FromPS.B.readASCII(f["stream"],0,f["stream"].length));
-			es.push({  typ:"file", val: {  buff:f["stream"], off:0 }  });	// execution stack
+			//console.log(FromPS.B.readASCII(FromPDF.GS(f),0,FromPDF.GS(f).length));
+			es.push({  typ:"file", val: {  buff:FromPDF.GS(f), off:0 }  });	// execution stack
 			var repeat = true;
 			while(repeat) repeat = FromPS.step(os, ds, es, gs, env, {}, FromPDF.operator);
 			
@@ -485,7 +521,7 @@
 	
 	FromPDF.getString = function(sv, fnt)
 	{
-		//if(sv.length==9) console.log(sv, fnt);  //throw "e";
+		//console.log(sv, fnt);  //throw "e";
 		
 		var st = fnt["/Subtype"], s="", m=0, psn=null;
 		var tou = fnt["/ToUnicode"], enc = fnt["/Encoding"], sfnt=fnt;	// font with a stream
@@ -504,16 +540,26 @@
 		}
 		else if(enc!=null && enc["/Type"]=="/Encoding") {
 			var dfs = enc["/Differences"];
+			var benc = enc["/BaseEncoding"], map = null;
+			if(benc=="/WinAnsiEncoding" ) map = FromPDF._win1252;
+			if(benc=="/MacRomanEncoding") map = FromPDF._macRoman;
 			if(dfs) {
+				//console.log(sv,dfs);
 				var s = "";
 				for(var i=0; i<sv.length; i++) {
-					var ci = sv[i], coff=-5;
+					var ci = sv[i], coff=-5, found = false;
 					for(var j=0; j<dfs.length; j++)
 					{
-						if(typeof dfs[j] == "string") {  if(ci==coff) s+=FromPDF.fromCName(dfs[j].slice(1));  coff++;  }
+						if(typeof dfs[j] == "string") {  if(ci==coff) {  s+=FromPDF.fromCName(dfs[j].slice(1));  found=true;  break;  }  coff++;  }
 						else coff=dfs[j];
 					}
+					if(!found && map!=null) {
+						var cin = map.indexOf(ci);
+						if(cin!=-1) ci = String.fromCharCode(map[cin+1]);
+						s += String.fromCharCode(ci);
+					}
 				}
+				//console.log(s);
 			}
 			//console.log(enc, sv);	throw "e";
 			//s = FromPDF.fromWin(sv);
@@ -553,7 +599,7 @@
 				var pp, ps = ["","2","3"];
 				for(var i=0; i<3; i++) if(fd["/FontFile"+ps[i]]) pp = "/FontFile"+ps[i];
 				if(pp) {
-					var fle = fd[pp]["stream"];
+					var fle = FromPDF.GS(fd[pp]);
 					if(pp!=null && fle && FromPS.B.readUint(fle,0)==65536) psn = fd["psName"] = FromPDF._psName(fle);
 				}
 			}
@@ -644,7 +690,7 @@
 			"colon":58,"semicolon":59,"less":60,"equal":61,"at":64,
 			"bracketleft":91,"bracketright":93,"underscore":95,"braceleft":123,"braceright":125,
 			"dieresis":168,"circlecopyrt":169,"Eacute":201,
-			"dotlessi":0x0131,
+			"dotlessi":0x0131,"tcaron":0x165,
 			"alpha":0x03B1,"phi":0x03C6,
 			"endash":0x2013,"emdash":0x2014,"asteriskmath":0x2217,"quoteright":0x2019,"quotedblleft":0x201C,"quotedblright":0x201D,"bullet":0x2022,
 			"minus":0x2202,
@@ -658,7 +704,7 @@
 	FromPDF.toUnicode = function(sar, tou) {
 		var cmap = tou["cmap"], s = "";
 		if(cmap==null) {
-			var file = {buff:tou["stream"], off:0};
+			var file = {buff:FromPDF.GS(tou), off:0};
 			//console.log(FromPS.B.readASCII(file.buff, 0, file.buff.length));
 			var os = [];	// operand stack
 			var ds = FromPS._getDictStack({});
@@ -731,7 +777,7 @@
 			while(!FromPS.isEOL(buff[off])) off++;   off++;
 			
 			var xr = FromPDF.readObject({buff:buff, off:off}, file, null);  //console.log(xr);
-			var sof = 0, sb = xr["stream"], w = xr["/W"], ind = (xr["/Index"] ? xr["/Index"][0] : 0);
+			var sof = 0, sb = FromPDF.GS(xr), w = xr["/W"], ind = (xr["/Index"] ? xr["/Index"][0] : 0);
 			while(sof<sb.length) {
 				var typ=FromPDF.getInt(sb,sof,w[0]);  sof+=w[0];
 				var a  =FromPDF.getInt(sb,sof,w[1]);  sof+=w[1];
@@ -772,7 +818,7 @@
 		var ooff = file.off, nval;
 		
 		if(xv.chr=="s") {
-			var os = FromPDF.getIndirect(xv.off, xv.gen, file, xr), fle = {buff:os["stream"], off:0};
+			var os = FromPDF.getIndirect(xv.off, xv.gen, file, xr), fle = {buff:FromPDF.GS(os), off:0};
 			var idx=0, ofs=0;
 			while(idx!=i) {  idx=FromPS.getFToken(fle).val;  ofs=FromPS.getFToken(fle).val;  }
 			fle.off = ofs+os["/First"];
@@ -830,9 +876,13 @@
 		if(o["/Length"]!=null) {
 			var l = o["/Length"];
 			var tk = FromPS.getFToken(file);  if(file.buff[file.off]==13) file.off++;  if(file.buff[file.off]==10) file.off++;
-			
-			var buff = file.buff.slice(file.off, file.off+l);  file.off += l;  FromPS.getFToken(file); // endstream
-			
+			o["buff"] = file.buff.slice(file.off, file.off+l);  file.off += l;  FromPS.getFToken(file); // endstream
+		}
+		return o;
+	}
+	FromPDF.GS = function(o) {
+		if(o["stream"]==null) {
+			var buff = o["buff"];  delete o["buff"];
 			var flt = o["/Filter"], prm=o["/DecodeParms"];
 			if(flt!=null) {
 				var fla = (typeof flt == "string") ? [flt] : flt;
@@ -856,7 +906,7 @@
 			}
 			o["stream"] = buff;
 		}
-		return o;
+		return o["stream"];
 	}
 	FromPDF.readArra = function(file, mfile, xr) {
 		var o = [];

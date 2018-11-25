@@ -13,7 +13,26 @@
 			return [x0,y0,x1,y1];
 		},
 		rectToPath: function(r) {  return  {cmds:["M","L","L","L","Z"],crds:[r[0],r[1],r[2],r[1], r[2],r[3],r[0],r[3]]};  },
+		// a inside b
 		insideBox: function(a,b) {  return b[0]<=a[0] && b[1]<=a[1] && a[2]<=b[2] && a[3]<=b[3];   },
+		isBox : function(p, bb) {
+			var sameCrd8 = function(pcrd, crds) {
+				for(var o=0; o<8; o+=2) {  var eq = true;  for(var j=0; j<8; j++) if(Math.abs(crds[j]-pcrd[(j+o)&7])>=2) {  eq = false;  break;  }    if(eq) return true;  }
+				return false;
+			};
+			if(p.cmds.length>10) return false;
+			var cmds=p.cmds.join(""), crds=p.crds;
+			var sameRect = false;
+			if((cmds=="MLLLZ"  && crds.length== 8) 
+			 ||(cmds=="MLLLLZ" && crds.length==10) ) {
+				if(crds.length==10) crds=crds.slice(0,8);
+				var x0=bb[0],y0=bb[1],x1=bb[2],y1=bb[3];
+				if(!sameRect) sameRect = sameCrd8(crds, [x0,y0,x1,y0,x1,y1,x0,y1]);
+				if(!sameRect) sameRect = sameCrd8(crds, [x0,y1,x1,y1,x1,y0,x0,y0]);
+			}
+			return sameRect;
+		},
+		boxArea: function(a) {  var w=a[2]-a[0], h=a[3]-a[1];  return w*h;  },
 		newPath: function(gst    ) {  gst.pth = {cmds:[], crds:[]};  },
 		moveTo : function(gst,x,y) {  var p=UDOC.M.multPoint(gst.ctm,[x,y]);  //if(gst.cpos[0]==p[0] && gst.cpos[1]==p[1]) return;
 										gst.pth.cmds.push("M");  gst.pth.crds.push(p[0],p[1]);  gst.cpos = p;  },
@@ -57,7 +76,67 @@
 			UDOC.G.concat(gst.pth, pth);
 			var y=pth.crds.pop();  x=pth.crds.pop();
 			gst.cpos = [x,y];
-		}
+		},
+		toPoly : function(p) {
+			if(p.cmds[0]!="M" || p.cmds[p.cmds.length-1]!="Z") return null;
+			for(var i=1; i<p.cmds.length-1; i++) if(p.cmds[i]!="L") return null;
+			var out = [], cl = p.crds.length;
+			if(p.crds[0]==p.crds[cl-2] && p.crds[1]==p.crds[cl-1]) cl-=2;
+			for(var i=0; i<cl; i+=2) out.push([p.crds[i],p.crds[i+1]]);
+			if(UDOC.G.polyArea(p.crds)<0) out.reverse();
+			return out;
+		},
+		fromPoly : function(p) {
+			var o = {cmds:[],crds:[]};
+			for(var i=0; i<p.length; i++) { o.crds.push(p[i][0], p[i][1]);  o.cmds.push(i==0?"M":"L");  }
+			o.cmds.push("Z");
+			return o;
+		},
+		polyArea : function(p) {
+			if(p.length <6) return 0;
+			var l = p.length - 2;
+			var sum = (p[0]-p[l]) * (p[l+1]+p[1]);
+			for(var i=0; i<l; i+=2)
+				sum += (p[i+2]-p[i]) * (p[i+1]+p[i+3]);
+			return - sum * 0.5;
+		},
+		polyClip : function(p0, p1) {  // p0 clipped by p1
+            var cp1, cp2, s, e;
+            var inside = function (p) {
+                return (cp2[0]-cp1[0])*(p[1]-cp1[1]) > (cp2[1]-cp1[1])*(p[0]-cp1[0]);
+            };
+            var isc = function () {
+                var dc = [ cp1[0] - cp2[0], cp1[1] - cp2[1] ],
+                    dp = [ s[0] - e[0], s[1] - e[1] ],
+                    n1 = cp1[0] * cp2[1] - cp1[1] * cp2[0],
+                    n2 = s[0] * e[1] - s[1] * e[0], 
+                    n3 = 1.0 / (dc[0] * dp[1] - dc[1] * dp[0]);
+                return [(n1*dp[0] - n2*dc[0]) * n3, (n1*dp[1] - n2*dc[1]) * n3];
+            };
+            var out = p0;
+            cp1 = p1[p1.length-1];
+            for (j in p1) {
+                var cp2 = p1[j];
+                var inp = out;
+                out = [];
+                s = inp[inp.length - 1]; //last on the input list
+                for (i in inp) {
+                    var e = inp[i];
+                    if (inside(e)) {
+                        if (!inside(s)) {
+                            out.push(isc());
+                        }
+                        out.push(e);
+                    }
+                    else if (inside(s)) {
+                        out.push(isc());
+                    }
+                    s = e;
+                }
+                cp1 = cp2;
+            }
+            return out
+        }
 	}
 	UDOC.M = {
 		getScale : function(m) {  return Math.sqrt(Math.abs(m[0]*m[3]-m[1]*m[2]));  },
