@@ -1,6 +1,6 @@
 
 
-	function ToContext2D(needPage, scale)
+	function ToContext2D(needPage, scale, leftHand=true)
 	{
 		this.canvas = document.createElement("canvas");
 		this.ctx = this.canvas.getContext("2d");
@@ -8,6 +8,7 @@
 		this.currPage = 0;
 		this.needPage = needPage;
 		this.scale = scale;
+		this.leftHand = leftHand;	// Use left-hand coordinate system
 	}
 	ToContext2D.prototype.StartPage = function(x,y,w,h) {
 		if(this.currPage!=this.needPage) return;
@@ -15,7 +16,8 @@
 		var scl = this.scale, dpr = window.devicePixelRatio;
 		var cnv = this.canvas, ctx = this.ctx;
 		cnv.width = Math.round(w*scl);  cnv.height = Math.round(h*scl);
-		ctx.translate(0,h*scl);  ctx.scale(scl,-scl);
+		ctx.translate(0,this.leftHand ? h*scl : 0);  
+		ctx.scale(scl,this.leftHand ? -scl:scl);
 		cnv.setAttribute("style", "border:1px solid; width:"+(cnv.width/dpr)+"px; height:"+(cnv.height/dpr)+"px");
 	}
 	ToContext2D.prototype.Fill = function(gst, evenOdd) {
