@@ -126,3 +126,5 @@
 			else if(cmd=="Z") {  ctx.closePath();  }
 		}
 	}
+
+	module.exports.ToContext2D = ToContext2D;

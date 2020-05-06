@@ -1,4 +1,5 @@
-
+	let pako = require("pako");
+	let {FromPS} = require("./FromPS.js");
 
 	function ToPDF()
 	{
@@ -393,4 +394,4 @@
 		this.data = ndata;
 	}
 	
-	
+	module.exports.ToPDF = ToPDF;

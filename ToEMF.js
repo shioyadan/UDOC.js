@@ -444,4 +444,4 @@
 		for(var p in inp) out[inp[p]] = p.slice(stt);
 	}  )();
 	
-	
+	module.exports.ToEMF = ToEMF;

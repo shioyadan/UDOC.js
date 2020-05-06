@@ -1,6 +1,8 @@
 	
 	
-	
+	let pako = require("pako");
+	let {UDOC} = require("./UDOC.js");
+
 	
 	function FromPS ()
 	{
@@ -1077,4 +1079,4 @@
 		return val;
 	}
 	
-	
+	module.exports.FromPS = FromPS;

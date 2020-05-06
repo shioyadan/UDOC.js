@@ -1,6 +1,6 @@
 	
 	
-	
+	let {UDOC} = require("./UDOC.js");
 	
 	function FromEMF ()
 	{
@@ -35,6 +35,7 @@
 				prms.bb = FromEMF._readBox(buff,loff);   loff+=16;  //console.log(fnm, prms.bb);
 				genv.StartPage(prms.bb[0],prms.bb[1],prms.bb[2],prms.bb[3]);
 				gst = UDOC.getState(prms.bb);	
+				//gst.ctm[3] = -1;
 			}
 			else if(fnm=="SAVEDC") sts.push(JSON.stringify(gst), JSON.stringify(prms));
 			else if(fnm=="RESTOREDC") {
@@ -519,3 +520,6 @@
 		for(var p in inp) out[inp[p]] = p.slice(stt);
 	}  )();
 	
+
+	//export {FromEMF};
+	module.exports.FromEMF = FromEMF;

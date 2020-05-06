@@ -1,5 +1,5 @@
-	
-	
+	let {UDOC} = require("./UDOC.js");
+	let {FromPS} = require("./FromPS.js");
 	
 	
 	function FromPDF ()
@@ -956,4 +956,5 @@
 		else if (pb <= pc)  return b;
 		return c;
 	}
-	
+
+	module.exports.FromPDF = FromPDF;

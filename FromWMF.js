@@ -1,6 +1,6 @@
 	
 	
-	
+	let {UDOC} = require("./UDOC.js");
 	
 	function FromWMF ()
 	{
@@ -496,4 +496,4 @@
 		//console.log(FromWMF.K, FromWMF.K2);
 	}  )();
 		
-		
+	module.exports.FromWMF = FromWMF;
